@@ -58,6 +58,15 @@ export default async function LearnPage({
         </div>
       </div>
 
+      {progress.percent === 100 && (
+        <div className="border-b bg-muted/50 p-3 text-center text-sm">
+          You&apos;ve completed this course.{" "}
+          <Link href="/student/certificates" className="font-medium underline">
+            Get your certificate
+          </Link>
+        </div>
+      )}
+
       <div className="mx-auto grid w-full max-w-6xl flex-1 gap-6 p-4 lg:grid-cols-[280px_1fr]">
         <aside className="space-y-4">
           {course.sections.map((section) => (

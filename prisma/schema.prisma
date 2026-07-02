@@ -55,6 +55,7 @@ model User {
   reviews        CourseReview[]
   wishlist       Wishlist[]
   quizAttempts   QuizAttempt[]
+  certificates   Certificate[]
 
   @@index([status])
 }
@@ -218,6 +219,7 @@ model Course {
   reviews      CourseReview[]
   wishlistedBy Wishlist[]
   quizzes      Quiz[]
+  certificates Certificate[]
 
   @@index([status])
   @@index([teacherId])
@@ -459,4 +461,25 @@ model QuizAnswer {
   question Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
 
   @@unique([attemptId, questionId])
+}
+
+model Certificate {
+  id                String    @id @default(cuid())
+  certificateNumber String    @unique
+  userId            String
+  courseId          String
+  // Snapshot fields so a certificate stays a stable historical record even if the
+  // student renames themselves or the course/teacher details change later.
+  studentName       String
+  courseTitle       String
+  teacherName       String
+  completedAt       DateTime
+  issuedAt          DateTime  @default(now())
+  revoked           Boolean   @default(false)
+  revokedAt         DateTime?
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, courseId])
 }

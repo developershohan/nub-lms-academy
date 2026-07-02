@@ -165,3 +165,29 @@ export async function canAttemptQuiz(userId: string, quizId: string): Promise<bo
   });
   return submittedCount < quiz.maxAttempts;
 }
+
+/**
+ * Enrolled + active + course published + every lesson completed + every quiz in the course
+ * passed at least once. Whether a certificate already exists is an idempotency concern for the
+ * generate step, not an eligibility one - this only answers "have they earned it".
+ */
+export async function canGenerateCertificate(userId: string, courseId: string): Promise<boolean> {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user || user.status !== "ACTIVE") return false;
+
+  const course = await prisma.course.findUnique({ where: { id: courseId }, select: { status: true } });
+  if (!course || course.status !== "PUBLISHED") return false;
+
+  const enrollment = await prisma.enrollment.findUnique({ where: { userId_courseId: { userId, courseId } } });
+  if (!enrollment || enrollment.status !== "ACTIVE" || !enrollment.completedAt) return false;
+
+  const quizzes = await prisma.quiz.findMany({ where: { courseId }, select: { id: true } });
+  if (quizzes.length === 0) return true;
+
+  const passedQuizIds = await prisma.quizAttempt.findMany({
+    where: { userId, status: "SUBMITTED", passed: true, quizId: { in: quizzes.map((q) => q.id) } },
+    select: { quizId: true },
+    distinct: ["quizId"],
+  });
+  return passedQuizIds.length === quizzes.length;
+}
