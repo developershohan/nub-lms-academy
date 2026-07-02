@@ -4,6 +4,7 @@ import type Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import { getStripeClient } from "@/lib/stripe";
 import { canAdminAccess } from "@/lib/permissions";
+import { logAudit } from "@/lib/audit";
 import type { SubscriptionPlanInput } from "@/lib/validations/subscription";
 
 function revalidateSubscriptionPaths() {
@@ -24,6 +25,7 @@ export async function createPlan(actorId: string, data: SubscriptionPlanInput) {
   if (!(await canAdminAccess(actorId))) return { error: "Forbidden" } as const;
 
   const plan = await prisma.subscriptionPlan.create({ data });
+  await logAudit(actorId, "subscription-plan:create", "SubscriptionPlan", plan.id, { name: plan.name });
   revalidateSubscriptionPaths();
   return { ok: true, plan } as const;
 }
@@ -32,6 +34,7 @@ export async function setPlanActive(actorId: string, planId: string, active: boo
   if (!(await canAdminAccess(actorId))) return { error: "Forbidden" } as const;
 
   await prisma.subscriptionPlan.update({ where: { id: planId }, data: { active } });
+  await logAudit(actorId, active ? "subscription-plan:activate" : "subscription-plan:deactivate", "SubscriptionPlan", planId);
   revalidateSubscriptionPaths();
   return { ok: true } as const;
 }

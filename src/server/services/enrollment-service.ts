@@ -45,3 +45,21 @@ export function listStudentEnrollments(userId: string) {
     orderBy: { enrolledAt: "desc" },
   });
 }
+
+/** For the "start a conversation" picker - students actively enrolled in one of this teacher's courses. */
+export function listStudentsForTeacher(teacherId: string) {
+  return prisma.user.findMany({
+    where: { enrollments: { some: { status: "ACTIVE", course: { teacherId } } } },
+    select: { id: true, name: true, email: true },
+    orderBy: { name: "asc" },
+  });
+}
+
+/** For the "start a conversation" picker - teachers of courses this student is actively enrolled in. */
+export function listTeachersForStudent(userId: string) {
+  return prisma.user.findMany({
+    where: { courses: { some: { enrollments: { some: { userId, status: "ACTIVE" } } } } },
+    select: { id: true, name: true, email: true },
+    orderBy: { name: "asc" },
+  });
+}

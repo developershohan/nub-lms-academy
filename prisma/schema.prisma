@@ -59,6 +59,10 @@ model User {
   orders         Order[]
   couponRedemptions CouponRedemption[]
   subscriptions  Subscription[]
+  conversationParticipants ConversationParticipant[]
+  messages                 Message[]
+  messageReadReceipts      MessageReadReceipt[]
+  notifications            Notification[]
 
   @@index([status])
 }
@@ -215,16 +219,17 @@ model Course {
   categoryId String?
   category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
-  sections     CourseSection[]
-  requirements CourseRequirement[]
-  outcomes     CourseOutcome[]
-  enrollments  Enrollment[]
-  reviews      CourseReview[]
-  wishlistedBy Wishlist[]
-  quizzes      Quiz[]
-  certificates Certificate[]
-  orderItems   OrderItem[]
-  coupons      Coupon[]
+  sections      CourseSection[]
+  requirements  CourseRequirement[]
+  outcomes      CourseOutcome[]
+  enrollments   Enrollment[]
+  reviews       CourseReview[]
+  wishlistedBy  Wishlist[]
+  quizzes       Quiz[]
+  certificates  Certificate[]
+  orderItems    OrderItem[]
+  coupons       Coupon[]
+  conversations Conversation[]
 
   @@index([status])
   @@index([teacherId])
@@ -638,4 +643,90 @@ model Subscription {
 
   @@index([userId])
   @@index([status])
+}
+
+enum ConversationType {
+  DIRECT
+  COURSE_GROUP
+  SUPPORT
+}
+
+model Conversation {
+  id        String           @id @default(cuid())
+  type      ConversationType
+  courseId  String?
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  course       Course?                   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  participants ConversationParticipant[]
+  messages     Message[]
+
+  @@index([courseId])
+  @@index([type])
+}
+
+model ConversationParticipant {
+  id             String    @id @default(cuid())
+  conversationId String
+  userId         String
+  lastReadAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+}
+
+/// deletedAt covers both a sender's own soft delete and admin moderation (chat:moderate) - either
+/// way the content is hidden and replaced with a placeholder, so there's no need for two flags.
+model Message {
+  id             String    @id @default(cuid())
+  conversationId String
+  senderId       String
+  content        String    @db.Text
+  reportedAt     DateTime?
+  reportReason   String?
+  deletedAt      DateTime?
+  createdAt      DateTime  @default(now())
+
+  conversation Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User                 @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  readReceipts MessageReadReceipt[]
+
+  @@index([conversationId, createdAt])
+}
+
+model MessageReadReceipt {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  readAt    DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+}
+
+enum NotificationStatus {
+  UNREAD
+  READ
+}
+
+model Notification {
+  id        String             @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String?
+  link      String?
+  status    NotificationStatus @default(UNREAD)
+  createdAt DateTime           @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
 }

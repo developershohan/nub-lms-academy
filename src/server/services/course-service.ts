@@ -2,6 +2,7 @@ import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { canManageCourse, canAdminAccess } from "@/lib/permissions";
+import { logAudit } from "@/lib/audit";
 import { slugify } from "@/lib/slug";
 import type { CourseDetailsInput, LessonInput } from "@/lib/validations/course";
 
@@ -201,6 +202,7 @@ export async function approveCourse(actorId: string, courseId: string) {
   if (course.status !== "IN_REVIEW") return { error: "Course is not awaiting review" } as const;
 
   await prisma.course.update({ where: { id: courseId }, data: { status: "APPROVED" } });
+  await logAudit(actorId, "course:approve", "Course", courseId);
   revalidateCoursePaths(courseId);
   return { ok: true } as const;
 }
@@ -213,6 +215,7 @@ export async function rejectCourse(actorId: string, courseId: string, reason: st
   if (course.status !== "IN_REVIEW") return { error: "Course is not awaiting review" } as const;
 
   await prisma.course.update({ where: { id: courseId }, data: { status: "REJECTED", rejectionReason: reason } });
+  await logAudit(actorId, "course:reject", "Course", courseId, { reason });
   revalidateCoursePaths(courseId);
   return { ok: true } as const;
 }
@@ -225,6 +228,7 @@ export async function publishCourse(actorId: string, courseId: string) {
   if (course.status !== "APPROVED") return { error: "Only approved courses can be published" } as const;
 
   await prisma.course.update({ where: { id: courseId }, data: { status: "PUBLISHED", publishedAt: new Date() } });
+  await logAudit(actorId, "course:publish", "Course", courseId);
   revalidateCoursePaths(courseId, course.slug);
   return { ok: true } as const;
 }
@@ -237,6 +241,19 @@ export async function unpublishCourse(actorId: string, courseId: string) {
   if (course.status !== "PUBLISHED") return { error: "Course is not published" } as const;
 
   await prisma.course.update({ where: { id: courseId }, data: { status: "APPROVED" } });
+  await logAudit(actorId, "course:unpublish", "Course", courseId);
+  revalidateCoursePaths(courseId, course.slug);
+  return { ok: true } as const;
+}
+
+export async function setCourseSubscriptionIncluded(actorId: string, courseId: string, included: boolean) {
+  if (!(await canAdminAccess(actorId))) return { error: "Forbidden" } as const;
+
+  const course = await prisma.course.update({
+    where: { id: courseId },
+    data: { isSubscriptionIncluded: included },
+  });
+  await logAudit(actorId, included ? "course:include-in-subscription" : "course:exclude-from-subscription", "Course", courseId);
   revalidateCoursePaths(courseId, course.slug);
   return { ok: true } as const;
 }

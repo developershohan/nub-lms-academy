@@ -2,6 +2,7 @@ import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { canAdminAccess } from "@/lib/permissions";
+import { logAudit } from "@/lib/audit";
 
 export function listCourseReviews(courseId: string) {
   return prisma.courseReview.findMany({
@@ -56,6 +57,7 @@ export async function setReviewHidden(actorId: string, reviewId: string, hidden:
     data: { hidden },
     include: { course: { select: { slug: true } } },
   });
+  await logAudit(actorId, hidden ? "review:hide" : "review:unhide", "CourseReview", reviewId);
   revalidatePath(`/courses/${review.course.slug}`);
   revalidatePath("/admin/reviews");
   return { ok: true } as const;
@@ -68,6 +70,7 @@ export async function deleteReview(actorId: string, reviewId: string) {
     where: { id: reviewId },
     include: { course: { select: { slug: true } } },
   });
+  await logAudit(actorId, "review:delete", "CourseReview", reviewId);
   revalidatePath(`/courses/${review.course.slug}`);
   revalidatePath("/admin/reviews");
   return { ok: true } as const;

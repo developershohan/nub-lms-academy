@@ -15,13 +15,20 @@ export default async function AdminCoursesPage() {
           <Card key={course.id}>
             <CardHeader className="flex-row items-center justify-between space-y-0">
               <CardTitle className="text-base">{course.title}</CardTitle>
-              <Badge variant="secondary">{course.status.replace("_", " ")}</Badge>
+              <div className="flex gap-2">
+                {course.isSubscriptionIncluded && <Badge variant="outline">Subscription</Badge>}
+                <Badge variant="secondary">{course.status.replace("_", " ")}</Badge>
+              </div>
             </CardHeader>
             <CardContent className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">
                 {course.teacher.name ?? course.teacher.email} · {course.category?.name ?? "Uncategorized"}
               </span>
-              <CourseReviewActions courseId={course.id} status={course.status} />
+              <CourseReviewActions
+                courseId={course.id}
+                status={course.status}
+                isSubscriptionIncluded={course.isSubscriptionIncluded}
+              />
             </CardContent>
           </Card>
         ))}

@@ -3,6 +3,7 @@ import { randomBytes } from "crypto";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { canGenerateCertificate, canAdminAccess } from "@/lib/permissions";
+import { logAudit } from "@/lib/audit";
 
 function generateCertificateNumber() {
   return `NUB-${randomBytes(6).toString("hex").toUpperCase()}`;
@@ -92,6 +93,7 @@ export async function revokeCertificate(actorId: string, certificateId: string) 
     where: { id: certificateId },
     data: { revoked: true, revokedAt: new Date() },
   });
+  await logAudit(actorId, "certificate:revoke", "Certificate", certificateId);
   revalidatePath("/admin/certificates");
   revalidatePath("/student/certificates");
   return { ok: true } as const;

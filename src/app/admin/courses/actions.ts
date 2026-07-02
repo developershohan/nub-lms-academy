@@ -2,7 +2,13 @@
 
 import { auth } from "@/lib/auth";
 import { rejectCourseSchema } from "@/lib/validations/course";
-import { approveCourse, rejectCourse, publishCourse, unpublishCourse } from "@/server/services/course-service";
+import {
+  approveCourse,
+  rejectCourse,
+  publishCourse,
+  unpublishCourse,
+  setCourseSubscriptionIncluded,
+} from "@/server/services/course-service";
 
 export type ActionState = { error?: string };
 
@@ -47,5 +53,29 @@ export async function unpublishCourseAction(_prevState: ActionState, formData: F
 
   const courseId = formData.get("courseId") as string;
   const result = await unpublishCourse(userId, courseId);
+  return "error" in result ? { error: result.error } : {};
+}
+
+export async function includeInSubscriptionAction(
+  _prevState: ActionState,
+  formData: FormData
+): Promise<ActionState> {
+  const userId = await requireUserId();
+  if (!userId) return { error: "Not authenticated" };
+
+  const courseId = formData.get("courseId") as string;
+  const result = await setCourseSubscriptionIncluded(userId, courseId, true);
+  return "error" in result ? { error: result.error } : {};
+}
+
+export async function excludeFromSubscriptionAction(
+  _prevState: ActionState,
+  formData: FormData
+): Promise<ActionState> {
+  const userId = await requireUserId();
+  if (!userId) return { error: "Not authenticated" };
+
+  const courseId = formData.get("courseId") as string;
+  const result = await setCourseSubscriptionIncluded(userId, courseId, false);
   return "error" in result ? { error: result.error } : {};
 }

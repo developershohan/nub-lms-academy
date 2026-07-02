@@ -7,6 +7,8 @@ import {
   rejectCourseAction,
   publishCourseAction,
   unpublishCourseAction,
+  includeInSubscriptionAction,
+  excludeFromSubscriptionAction,
   type ActionState,
 } from "@/app/admin/courses/actions";
 import { Button } from "@/components/ui/button";
@@ -23,14 +25,27 @@ function ActionButton({ label, pendingLabel, variant }: { label: string; pending
   );
 }
 
-export function CourseReviewActions({ courseId, status }: { courseId: string; status: string }) {
+export function CourseReviewActions({
+  courseId,
+  status,
+  isSubscriptionIncluded,
+}: {
+  courseId: string;
+  status: string;
+  isSubscriptionIncluded: boolean;
+}) {
   const [approveState, approveAction] = useActionState(approveCourseAction, initialState);
   const [rejectState, rejectAction] = useActionState(rejectCourseAction, initialState);
   const [publishState, publishAction] = useActionState(publishCourseAction, initialState);
   const [unpublishState, unpublishAction] = useActionState(unpublishCourseAction, initialState);
+  const [subscriptionState, subscriptionAction] = useActionState(
+    isSubscriptionIncluded ? excludeFromSubscriptionAction : includeInSubscriptionAction,
+    initialState
+  );
   const [showReject, setShowReject] = useState(false);
 
-  const error = approveState.error ?? rejectState.error ?? publishState.error ?? unpublishState.error;
+  const error =
+    approveState.error ?? rejectState.error ?? publishState.error ?? unpublishState.error ?? subscriptionState.error;
 
   return (
     <div className="flex flex-col items-end gap-2">
@@ -58,6 +73,14 @@ export function CourseReviewActions({ courseId, status }: { courseId: string; st
             <ActionButton label="Unpublish" pendingLabel="Unpublishing..." variant="outline" />
           </form>
         )}
+        <form action={subscriptionAction}>
+          <input type="hidden" name="courseId" value={courseId} />
+          <ActionButton
+            label={isSubscriptionIncluded ? "Remove from subscription" : "Include in subscription"}
+            pendingLabel="Saving..."
+            variant="outline"
+          />
+        </form>
       </div>
       {showReject && (
         <form action={rejectAction} className="flex w-64 flex-col items-end gap-2">

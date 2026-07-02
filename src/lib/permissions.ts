@@ -203,3 +203,32 @@ export async function canGenerateCertificate(userId: string, courseId: string): 
   });
   return passedQuizIds.length === quizzes.length;
 }
+
+/**
+ * COURSE_GROUP conversations aren't gated by a ConversationParticipant row (participants are
+ * added lazily on first visit) - access there is derived live from course access instead, so a
+ * student who was enrolled before ever opening the chat can still see the full history. DIRECT
+ * and SUPPORT conversations require an actual participant row. Moderators (chat:moderate) can
+ * always read, for the admin moderation view.
+ */
+export async function canAccessConversation(userId: string, conversationId: string): Promise<boolean> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: { roles: { include: { role: true } } },
+  });
+  if (!user || user.status !== "ACTIVE") return false;
+  const roles = user.roles.map((r) => r.role.name);
+  if (hasPermission(roles, "chat:moderate")) return true;
+
+  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
+  if (!conversation) return false;
+
+  if (conversation.type === "COURSE_GROUP") {
+    return conversation.courseId ? canAccessCourse(userId, conversation.courseId) : false;
+  }
+
+  const participant = await prisma.conversationParticipant.findUnique({
+    where: { conversationId_userId: { conversationId, userId } },
+  });
+  return !!participant;
+}

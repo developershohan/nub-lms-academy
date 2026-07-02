@@ -2,6 +2,7 @@ import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { canAdminAccess } from "@/lib/permissions";
+import { logAudit } from "@/lib/audit";
 import type { CouponInput } from "@/lib/validations/coupon";
 
 export async function validateCoupon(code: string, userId: string, courseId: string) {
@@ -62,6 +63,7 @@ export async function createCoupon(actorId: string, data: CouponInput) {
       expiresAt: data.expiresAt ? new Date(data.expiresAt) : null,
     },
   });
+  await logAudit(actorId, "coupon:create", "Coupon", coupon.id, { code: coupon.code });
   revalidatePath("/admin/coupons");
   return { ok: true, coupon } as const;
 }
@@ -70,6 +72,7 @@ export async function setCouponActive(actorId: string, couponId: string, active:
   if (!(await canAdminAccess(actorId))) return { error: "Forbidden" } as const;
 
   await prisma.coupon.update({ where: { id: couponId }, data: { active } });
+  await logAudit(actorId, active ? "coupon:activate" : "coupon:deactivate", "Coupon", couponId);
   revalidatePath("/admin/coupons");
   return { ok: true } as const;
 }

@@ -5,17 +5,30 @@ import { usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Button } from "@/components/ui/button";
+import { NotificationBell } from "@/components/notifications/notification-bell";
 import { cn } from "@/lib/utils";
 
 type NavItem = { href: string; label: string };
+type NotificationItem = {
+  id: string;
+  title: string;
+  body: string | null;
+  link: string | null;
+  status: "UNREAD" | "READ";
+  createdAt: string;
+};
 
 export function DashboardShell({
   title,
   navItems,
+  notifications = [],
+  unreadCount = 0,
   children,
 }: {
   title: string;
   navItems: NavItem[];
+  notifications?: NotificationItem[];
+  unreadCount?: number;
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
@@ -45,6 +58,7 @@ export function DashboardShell({
         <header className="flex h-14 items-center justify-between border-b px-4">
           <span className="font-semibold sm:hidden">{title}</span>
           <div className="ml-auto flex items-center gap-2">
+            <NotificationBell initialNotifications={notifications} initialUnreadCount={unreadCount} />
             <ThemeToggle />
             <Button variant="ghost" size="sm" onClick={() => signOut({ callbackUrl: "/" })}>
               Log out

@@ -1,8 +1,12 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/permissions";
 import { listOrdersForUser } from "@/server/services/order-service";
+import { getActiveSubscriptionForUser } from "@/server/services/subscription-service";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { CancelSubscriptionButton } from "@/components/subscription/cancel-subscription-button";
 
 const STATUS_VARIANT: Record<string, "secondary" | "outline" | "destructive"> = {
   PAID: "secondary",
@@ -16,11 +20,44 @@ export default async function BillingPage() {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const orders = await listOrdersForUser(user.id);
+  const [orders, subscription] = await Promise.all([
+    listOrdersForUser(user.id),
+    getActiveSubscriptionForUser(user.id),
+  ]);
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Billing</h1>
+
+      <div className="space-y-3">
+        <h2 className="text-lg font-medium">Subscription</h2>
+        {subscription ? (
+          <Card>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
+              <CardTitle className="text-base">{subscription.plan.name}</CardTitle>
+              <Badge variant="secondary">{subscription.status.replace("_", " ")}</Badge>
+            </CardHeader>
+            <CardContent className="flex items-center justify-between">
+              <span className="text-sm text-muted-foreground">
+                {subscription.cancelAtPeriodEnd ? "Cancels" : "Renews"}{" "}
+                {subscription.currentPeriodEnd ? subscription.currentPeriodEnd.toLocaleDateString() : "-"}
+              </span>
+              {!subscription.cancelAtPeriodEnd && <CancelSubscriptionButton />}
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardContent className="flex items-center justify-between pt-6">
+              <p className="text-sm text-muted-foreground">No active subscription.</p>
+              <Button size="sm" render={<Link href="/pricing" />}>
+                View plans
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+
+      <h2 className="text-lg font-medium">Orders</h2>
       {orders.length === 0 && <p className="text-muted-foreground">No orders yet.</p>}
       <div className="space-y-3">
         {orders.map((order) => (

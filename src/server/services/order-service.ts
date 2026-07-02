@@ -4,6 +4,7 @@ import type Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import { getStripeClient } from "@/lib/stripe";
 import { canAdminAccess } from "@/lib/permissions";
+import { logAudit } from "@/lib/audit";
 import { validateCoupon, calculateDiscount } from "@/server/services/coupon-service";
 
 function revalidateOrderPaths() {
@@ -213,6 +214,7 @@ export async function refundOrder(actorId: string, orderId: string) {
     }
   });
 
+  await logAudit(actorId, "order:refund", "Order", orderId);
   revalidateOrderPaths();
   revalidatePath("/student/my-courses");
   return { ok: true } as const;
