@@ -96,6 +96,19 @@ export function listCoursesForAdmin() {
   });
 }
 
+/** Full lesson content for the learning page - caller must check canAccessCourse first. */
+export function getCourseForLearning(courseId: string) {
+  return prisma.course.findUnique({
+    where: { id: courseId },
+    include: {
+      sections: {
+        orderBy: { sortOrder: "asc" },
+        include: { lessons: { orderBy: { sortOrder: "asc" }, include: { videoAsset: true } } },
+      },
+    },
+  });
+}
+
 /** Only the owning teacher can manage a course - admins review/approve/publish but don't edit content. */
 export async function getCourseForEdit(courseId: string, userId: string) {
   if (!(await canManageCourse(userId, courseId))) return null;

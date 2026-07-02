@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect } from "react";
 import { useFormStatus } from "react-dom";
+import { toast } from "sonner";
 import { updateCourseDetailsAction, type ActionState } from "@/app/teacher/(dashboard)/courses/[courseId]/edit/actions";
 import { courseLevels } from "@/lib/validations/course";
 import { Button } from "@/components/ui/button";
@@ -47,6 +48,10 @@ export function CourseDetailsForm({
   const action = updateCourseDetailsAction.bind(null, courseId);
   const [state, formAction] = useActionState(action, initialState);
 
+  useEffect(() => {
+    if (state.success) toast.success("Course details saved");
+  }, [state]);
+
   return (
     <form action={formAction} className="space-y-4">
       <div className="grid gap-4 sm:grid-cols-2">
@@ -64,7 +69,11 @@ export function CourseDetailsForm({
         </div>
         <div className="space-y-1.5">
           <Label>Category</Label>
-          <Select name="categoryId" defaultValue={course.categoryId ?? undefined}>
+          <Select
+            name="categoryId"
+            defaultValue={course.categoryId ?? undefined}
+            items={Object.fromEntries(categories.map((c) => [c.id, c.name]))}
+          >
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Uncategorized" />
             </SelectTrigger>
@@ -79,7 +88,11 @@ export function CourseDetailsForm({
         </div>
         <div className="space-y-1.5">
           <Label>Level</Label>
-          <Select name="level" defaultValue={course.level}>
+          <Select
+            name="level"
+            defaultValue={course.level}
+            items={Object.fromEntries(courseLevels.map((l) => [l, l.replace("_", " ")]))}
+          >
             <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
@@ -128,7 +141,6 @@ export function CourseDetailsForm({
         </div>
       </div>
       {state.error && <p className="text-sm text-destructive">{state.error}</p>}
-      {state.success && <p className="text-sm text-muted-foreground">Saved.</p>}
       <SubmitButton />
     </form>
   );

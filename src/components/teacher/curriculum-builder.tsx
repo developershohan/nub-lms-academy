@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -34,6 +35,15 @@ type Section = { id: string; title: string; lessons: Lesson[] };
 
 const initialState: ActionState = {};
 
+/** True only once an action has actually run (not on first mount), so callers can tell
+ * "just succeeded" apart from "hasn't been submitted yet" - both look like `{}`. */
+function useActionSuccess(state: ActionState, onSuccess: () => void) {
+  useEffect(() => {
+    if (state !== initialState && !state.error) onSuccess();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state]);
+}
+
 function SubmitButton({ label, pendingLabel }: { label: string; pendingLabel: string }) {
   const { pending } = useFormStatus();
   return (
@@ -54,7 +64,12 @@ function LessonFields({ lesson }: { lesson?: Lesson }) {
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1.5">
           <Label>Type</Label>
-          <Select name="type" value={type} onValueChange={(v) => setType(v as "VIDEO" | "TEXT")}>
+          <Select
+            name="type"
+            value={type}
+            onValueChange={(v) => setType(v as "VIDEO" | "TEXT")}
+            items={{ TEXT: "Text", VIDEO: "Video" }}
+          >
             <SelectTrigger className="w-full">
               <SelectValue />
             </SelectTrigger>
@@ -77,7 +92,8 @@ function LessonFields({ lesson }: { lesson?: Lesson }) {
       ) : (
         <div className="space-y-1.5">
           <Label>Video URL</Label>
-          <Input name="videoUrl" type="url" defaultValue={lesson?.videoAsset?.playbackUrl ?? ""} placeholder="https://..." />
+          <Input name="videoUrl" type="url" defaultValue={lesson?.videoAsset?.playbackUrl ?? ""} placeholder="https://youtube.com/watch?v=..." />
+          <p className="text-xs text-muted-foreground">YouTube, Vimeo, or a direct video file URL.</p>
         </div>
       )}
       <label className="flex items-center gap-2 text-sm">
@@ -92,6 +108,12 @@ function LessonRow({ lesson }: { lesson: Lesson }) {
   const [editing, setEditing] = useState(false);
   const [updateState, updateAction] = useActionState(updateLessonAction, initialState);
   const [deleteState, deleteAction] = useActionState(deleteLessonAction, initialState);
+
+  useActionSuccess(updateState, () => {
+    toast.success("Lesson updated");
+    setEditing(false);
+  });
+  useActionSuccess(deleteState, () => toast.success("Lesson deleted"));
 
   if (editing) {
     return (
@@ -134,10 +156,19 @@ function LessonRow({ lesson }: { lesson: Lesson }) {
 
 function AddLessonForm({ sectionId }: { sectionId: string }) {
   const [state, formAction] = useActionState(createLessonAction, initialState);
+  const formRef = useRef<HTMLFormElement>(null);
+  const [resetKey, setResetKey] = useState(0);
+
+  useActionSuccess(state, () => {
+    toast.success("Lesson added");
+    formRef.current?.reset();
+    setResetKey((k) => k + 1); // remounts LessonFields so its Type selection also resets to Text
+  });
+
   return (
-    <form action={formAction} className="space-y-3 rounded-md border border-dashed p-3">
+    <form ref={formRef} action={formAction} className="space-y-3 rounded-md border border-dashed p-3">
       <input type="hidden" name="sectionId" value={sectionId} />
-      <LessonFields />
+      <LessonFields key={resetKey} />
       {state.error && <p className="text-sm text-destructive">{state.error}</p>}
       <SubmitButton label="Add lesson" pendingLabel="Adding..." />
     </form>
@@ -148,6 +179,12 @@ function SectionCard({ section }: { section: Section }) {
   const [editingTitle, setEditingTitle] = useState(false);
   const [renameState, renameAction] = useActionState(updateSectionAction, initialState);
   const [deleteState, deleteAction] = useActionState(deleteSectionAction, initialState);
+
+  useActionSuccess(renameState, () => {
+    toast.success("Section renamed");
+    setEditingTitle(false);
+  });
+  useActionSuccess(deleteState, () => toast.success("Section deleted"));
 
   return (
     <Card>
@@ -192,8 +229,15 @@ function SectionCard({ section }: { section: Section }) {
 
 function AddSectionForm({ courseId }: { courseId: string }) {
   const [state, formAction] = useActionState(createSectionAction, initialState);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  useActionSuccess(state, () => {
+    toast.success("Section added");
+    formRef.current?.reset();
+  });
+
   return (
-    <form action={formAction} className="flex items-start gap-2">
+    <form ref={formRef} action={formAction} className="flex items-start gap-2">
       <input type="hidden" name="courseId" value={courseId} />
       <div className="flex-1 space-y-1.5">
         <Input name="title" placeholder="New section title" required />

@@ -114,3 +114,37 @@ export async function canManageCourse(userId: string, courseId: string): Promise
   const course = await prisma.course.findUnique({ where: { id: courseId }, select: { teacherId: true } });
   return course?.teacherId === userId;
 }
+
+/**
+ * Learner-facing view access, not a mutation right - so unlike canManageCourse, admins (and the
+ * owning teacher) may preview a course here for support/QA even without an Enrollment row.
+ */
+export async function canAccessCourse(userId: string, courseId: string): Promise<boolean> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: { roles: { include: { role: true } } },
+  });
+  if (!user || user.status !== "ACTIVE") return false;
+  const roles = user.roles.map((r) => r.role.name);
+  if (hasPermission(roles, "admin:access")) return true;
+
+  const course = await prisma.course.findUnique({ where: { id: courseId }, select: { teacherId: true, status: true } });
+  if (!course) return false;
+  if (course.teacherId === userId) return true;
+  if (course.status !== "PUBLISHED") return false;
+
+  const enrollment = await prisma.enrollment.findUnique({ where: { userId_courseId: { userId, courseId } } });
+  return enrollment?.status === "ACTIVE";
+}
+
+/** Preview lessons are visible to anyone (even signed out); everything else requires course access. */
+export async function canAccessLesson(userId: string | null, lessonId: string): Promise<boolean> {
+  const lesson = await prisma.lesson.findUnique({
+    where: { id: lessonId },
+    select: { isPreview: true, section: { select: { courseId: true, course: { select: { status: true } } } } },
+  });
+  if (!lesson || lesson.section.course.status !== "PUBLISHED") return false;
+  if (lesson.isPreview) return true;
+  if (!userId) return false;
+  return canAccessCourse(userId, lesson.section.courseId);
+}

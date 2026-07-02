@@ -1,8 +1,16 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getPublishedCourseBySlug } from "@/server/services/course-service";
+import { getCurrentUser } from "@/lib/permissions";
+import { getEnrollment } from "@/server/services/enrollment-service";
+import { isWishlisted } from "@/server/services/wishlist-service";
+import { listCourseReviews, getCourseRatingSummary } from "@/server/services/review-service";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { EnrollButton } from "@/components/course/enroll-button";
+import { WishlistButton } from "@/components/course/wishlist-button";
+import { ReviewForm } from "@/components/course/review-form";
 
 export default async function CourseDetailPage({
   params,
@@ -13,8 +21,19 @@ export default async function CourseDetailPage({
   const course = await getPublishedCourseBySlug(slug);
   if (!course) notFound();
 
+  const user = await getCurrentUser();
+  const [enrollment, wishlisted, reviews, ratingSummary] = await Promise.all([
+    user ? getEnrollment(user.id, course.id) : null,
+    user ? isWishlisted(user.id, course.id) : false,
+    listCourseReviews(course.id),
+    getCourseRatingSummary(course.id),
+  ]);
+  const isEnrolled = enrollment?.status === "ACTIVE";
+  const myReview = user ? reviews.find((r) => r.userId === user.id) : undefined;
+
   const price = Number(course.price);
   const salePrice = course.salePrice != null ? Number(course.salePrice) : null;
+  const effectivePrice = salePrice ?? price;
   const lessonCount = course.sections.reduce((sum, s) => sum + s.lessons.length, 0);
 
   return (
@@ -29,6 +48,7 @@ export default async function CourseDetailPage({
           {course.subtitle && <p className="text-lg text-muted-foreground">{course.subtitle}</p>}
           <p className="text-sm text-muted-foreground">
             By {course.teacher.name ?? "Unknown instructor"} · {course.language} · {lessonCount} lessons
+            {ratingSummary.count > 0 && ` · ${ratingSummary.average.toFixed(1)} (${ratingSummary.count} reviews)`}
           </p>
         </div>
 
@@ -81,6 +101,25 @@ export default async function CourseDetailPage({
             ))}
           </div>
         </div>
+
+        <div className="space-y-3">
+          <h2 className="text-xl font-semibold">Reviews</h2>
+          {isEnrolled && <ReviewForm courseId={course.id} slug={slug} existing={myReview} />}
+          {reviews.length === 0 && <p className="text-muted-foreground">No reviews yet.</p>}
+          <div className="space-y-3">
+            {reviews.map((review) => (
+              <Card key={review.id}>
+                <CardContent className="space-y-1 pt-4">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <span>{review.user.name ?? "Student"}</span>
+                    <Badge variant="outline">{review.rating} stars</Badge>
+                  </div>
+                  {review.comment && <p className="text-sm text-muted-foreground">{review.comment}</p>}
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
       </div>
 
       <Card className="h-fit">
@@ -97,9 +136,25 @@ export default async function CourseDetailPage({
               `$${price.toFixed(2)}`
             )}
           </p>
-          <Button className="w-full" disabled>
-            Enroll (coming in Phase 3)
-          </Button>
+
+          {!user && (
+            <Button className="w-full" render={<Link href={`/login?callbackUrl=/courses/${slug}`} />}>
+              Log in to enroll
+            </Button>
+          )}
+          {user && isEnrolled && (
+            <Button className="w-full" render={<Link href={`/student/course/${course.id}/learn`} />}>
+              Continue learning
+            </Button>
+          )}
+          {user && !isEnrolled && effectivePrice === 0 && <EnrollButton courseId={course.id} />}
+          {user && !isEnrolled && effectivePrice > 0 && (
+            <Button className="w-full" disabled>
+              Buy course (coming in Phase 6)
+            </Button>
+          )}
+
+          {user && <WishlistButton courseId={course.id} slug={slug} wishlisted={wishlisted} />}
         </CardContent>
       </Card>
     </div>
