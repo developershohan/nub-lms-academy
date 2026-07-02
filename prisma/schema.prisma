@@ -1,6 +1,7 @@
 // Prisma schema for NUB Academy LMS
-// Phase 1: auth, roles, permissions foundation only.
-// Course/quiz/payment/chat models are added in later phases.
+// Phase 1: auth, roles, permissions foundation.
+// Phase 2: course catalog (courses, sections, lessons, categories).
+// Quiz/payment/chat models are added in later phases.
 
 generator client {
   provider = "prisma-client"
@@ -48,6 +49,7 @@ model User {
   teacherProfile TeacherProfile?
   bans           UserBan[]        @relation("BannedUser")
   bansIssued     UserBan[]        @relation("BannedBy")
+  courses        Course[]
 
   @@index([status])
 }
@@ -140,4 +142,143 @@ model AuditLog {
 
   @@index([targetType, targetId])
   @@index([actorId])
+}
+
+enum CourseLevel {
+  BEGINNER
+  INTERMEDIATE
+  ADVANCED
+  ALL_LEVELS
+}
+
+enum CourseStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED
+  PUBLISHED
+  REJECTED
+  ARCHIVED
+}
+
+enum LessonType {
+  VIDEO
+  TEXT
+}
+
+enum VideoStatus {
+  UPLOADING
+  PROCESSING
+  READY
+  FAILED
+}
+
+model Category {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  courses Course[]
+}
+
+model Course {
+  id                     String       @id @default(cuid())
+  title                  String
+  slug                   String       @unique
+  subtitle               String?
+  description            String?      @db.Text
+  thumbnailUrl           String?
+  targetAudience         String?      @db.Text
+  level                  CourseLevel  @default(ALL_LEVELS)
+  language               String       @default("English")
+  price                  Decimal      @default(0) @db.Decimal(10, 2)
+  salePrice              Decimal?     @db.Decimal(10, 2)
+  isSubscriptionIncluded Boolean      @default(false)
+  status                 CourseStatus @default(DRAFT)
+  rejectionReason        String?
+  publishedAt            DateTime?
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  teacherId  String
+  teacher    User      @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  categoryId String?
+  category   Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  sections     CourseSection[]
+  requirements CourseRequirement[]
+  outcomes     CourseOutcome[]
+
+  @@index([status])
+  @@index([teacherId])
+  @@index([categoryId])
+}
+
+model CourseRequirement {
+  id        String @id @default(cuid())
+  courseId  String
+  content   String
+  sortOrder Int    @default(0)
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId])
+}
+
+model CourseOutcome {
+  id        String @id @default(cuid())
+  courseId  String
+  content   String
+  sortOrder Int    @default(0)
+
+  course Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId])
+}
+
+model CourseSection {
+  id        String   @id @default(cuid())
+  courseId  String
+  title     String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  course  Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lessons Lesson[]
+
+  @@index([courseId])
+}
+
+model Lesson {
+  id          String     @id @default(cuid())
+  sectionId   String
+  title       String
+  type        LessonType @default(TEXT)
+  content     String?    @db.Text
+  durationSec Int?
+  sortOrder   Int        @default(0)
+  isPreview   Boolean    @default(false)
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+
+  section    CourseSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  videoAsset VideoAsset?
+
+  @@index([sectionId])
+}
+
+model VideoAsset {
+  id              String      @id @default(cuid())
+  lessonId        String      @unique
+  provider        String      @default("external")
+  providerAssetId String?
+  playbackUrl     String
+  durationSec     Int?
+  status          VideoStatus @default(READY)
+  uploadedById    String
+  createdAt       DateTime    @default(now())
+
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
 }

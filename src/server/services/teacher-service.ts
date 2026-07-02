@@ -1,4 +1,5 @@
 import "server-only";
+import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
@@ -8,6 +9,9 @@ export async function applyForTeacher(userId: string) {
   if (existing) return { error: "Application already submitted" } as const;
 
   const profile = await prisma.teacherProfile.create({ data: { userId } });
+  revalidatePath("/teacher/apply");
+  revalidatePath("/admin/teachers");
+  revalidatePath("/admin/dashboard");
   return { ok: true, status: profile.status } as const;
 }
 
@@ -35,6 +39,9 @@ export async function approveTeacherApplication(actorId: string, teacherId: stri
   });
 
   await logAudit(actorId, "teacher:approve", "TeacherProfile", teacherId);
+  revalidatePath("/admin/teachers");
+  revalidatePath("/admin/dashboard");
+  revalidatePath("/teacher/apply");
   return { ok: true } as const;
 }
 
@@ -50,5 +57,8 @@ export async function rejectTeacherApplication(actorId: string, teacherId: strin
   });
 
   await logAudit(actorId, "teacher:reject", "TeacherProfile", teacherId);
+  revalidatePath("/admin/teachers");
+  revalidatePath("/admin/dashboard");
+  revalidatePath("/teacher/apply");
   return { ok: true } as const;
 }

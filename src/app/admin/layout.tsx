@@ -5,6 +5,8 @@ import { DashboardShell } from "@/components/layout/dashboard-shell";
 const NAV = [
   { href: "/admin/dashboard", label: "Overview" },
   { href: "/admin/teachers", label: "Teacher Applications" },
+  { href: "/admin/courses", label: "Courses" },
+  { href: "/admin/categories", label: "Categories" },
 ];
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {

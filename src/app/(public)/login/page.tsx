@@ -19,7 +19,7 @@ export default async function LoginPage({
           <CardDescription>Welcome back to NUB Academy</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <LoginForm callbackUrl={callbackUrl ?? "/"} />
+          <LoginForm callbackUrl={callbackUrl ?? ""} />
 
           <div className="space-y-2">
             <form action={signInWithGoogleAction}>

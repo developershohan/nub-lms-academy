@@ -98,6 +98,10 @@ export async function canAdminAccess(userId: string): Promise<boolean> {
   return hasPermission(user.roles.map((r) => r.role.name), "admin:access");
 }
 
+/**
+ * Course content (details/curriculum) is edited only by its owning teacher - not admins.
+ * Admin's course powers are reviewing/publishing (see canAdminAccess), never content edits.
+ */
 export async function canManageCourse(userId: string, courseId: string): Promise<boolean> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -105,9 +109,8 @@ export async function canManageCourse(userId: string, courseId: string): Promise
   });
   if (!user || user.status !== "ACTIVE") return false;
   const roles = user.roles.map((r) => r.role.name);
-  if (hasPermission(roles, "admin:access")) return true;
   if (!hasRole(roles, "TEACHER")) return false;
-  // ponytail: no Course model yet (Phase 2), teacher ownership check added then.
-  void courseId;
-  return true;
+
+  const course = await prisma.course.findUnique({ where: { id: courseId }, select: { teacherId: true } });
+  return course?.teacherId === userId;
 }

@@ -3,17 +3,11 @@ import { auth } from "@/lib/auth";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { UserMenu } from "@/components/layout/user-menu";
 import { Button } from "@/components/ui/button";
-
-const ROLE_HOME: Record<string, string> = {
-  SUPER_ADMIN: "/admin/dashboard",
-  ADMIN: "/admin/dashboard",
-  TEACHER: "/teacher/dashboard",
-  STUDENT: "/student/dashboard",
-};
+import { getRoleHome } from "@/lib/role-home";
 
 export async function SiteHeader() {
   const session = await auth();
-  const dashboardHref = session?.user.roles?.map((r) => ROLE_HOME[r]).find(Boolean) ?? "/student/dashboard";
+  const dashboardHref = session?.user ? getRoleHome(session.user.roles) : "/student/dashboard";
 
   return (
     <header className="border-b">
