@@ -54,6 +54,7 @@ model User {
   lessonProgress LessonProgress[]
   reviews        CourseReview[]
   wishlist       Wishlist[]
+  quizAttempts   QuizAttempt[]
 
   @@index([status])
 }
@@ -216,6 +217,7 @@ model Course {
   enrollments  Enrollment[]
   reviews      CourseReview[]
   wishlistedBy Wishlist[]
+  quizzes      Quiz[]
 
   @@index([status])
   @@index([teacherId])
@@ -273,6 +275,7 @@ model Lesson {
   section    CourseSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
   videoAsset VideoAsset?
   progress   LessonProgress[]
+  quiz       Quiz?
 
   @@index([sectionId])
 }
@@ -367,4 +370,93 @@ model Wishlist {
 
   @@unique([userId, courseId])
   @@index([courseId])
+}
+
+enum QuestionType {
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+  TRUE_FALSE
+}
+
+enum QuizAttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+}
+
+model Quiz {
+  id           String   @id @default(cuid())
+  courseId     String
+  lessonId     String?  @unique
+  title        String
+  description  String?  @db.Text
+  passingScore Int      @default(70)
+  maxAttempts  Int?
+  timeLimitSec Int?
+  sortOrder    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  course    Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  lesson    Lesson?       @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  questions Question[]
+  attempts  QuizAttempt[]
+
+  @@index([courseId])
+}
+
+model Question {
+  id        String       @id @default(cuid())
+  quizId    String
+  prompt    String       @db.Text
+  type      QuestionType @default(SINGLE_CHOICE)
+  points    Int          @default(1)
+  sortOrder Int          @default(0)
+
+  quiz    Quiz             @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  options QuestionOption[]
+  answers QuizAnswer[]
+
+  @@index([quizId])
+}
+
+model QuestionOption {
+  id         String  @id @default(cuid())
+  questionId String
+  content    String
+  isCorrect  Boolean @default(false)
+  sortOrder  Int     @default(0)
+
+  question Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+}
+
+model QuizAttempt {
+  id          String            @id @default(cuid())
+  quizId      String
+  userId      String
+  status      QuizAttemptStatus @default(IN_PROGRESS)
+  score       Int?
+  passed      Boolean?
+  startedAt   DateTime          @default(now())
+  submittedAt DateTime?
+
+  quiz    Quiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answers QuizAnswer[]
+
+  @@index([quizId, userId])
+}
+
+model QuizAnswer {
+  id                String   @id @default(cuid())
+  attemptId         String
+  questionId        String
+  selectedOptionIds String[]
+  isCorrect         Boolean  @default(false)
+
+  attempt  QuizAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  question Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([attemptId, questionId])
 }

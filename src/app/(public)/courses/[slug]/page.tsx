@@ -104,7 +104,14 @@ export default async function CourseDetailPage({
 
         <div className="space-y-3">
           <h2 className="text-xl font-semibold">Reviews</h2>
-          {isEnrolled && <ReviewForm courseId={course.id} slug={slug} existing={myReview} />}
+          {isEnrolled && (
+            <ReviewForm
+              key={myReview?.updatedAt.getTime() ?? "new"}
+              courseId={course.id}
+              slug={slug}
+              existing={myReview}
+            />
+          )}
           {reviews.length === 0 && <p className="text-muted-foreground">No reviews yet.</p>}
           <div className="space-y-3">
             {reviews.map((review) => (

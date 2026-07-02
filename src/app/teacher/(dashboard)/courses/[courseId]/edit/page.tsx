@@ -2,10 +2,12 @@ import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/permissions";
 import { getCourseForEdit } from "@/server/services/course-service";
 import { listCategories } from "@/server/services/category-service";
+import { listQuizzesForEdit } from "@/server/services/quiz-service";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CourseDetailsForm } from "@/components/teacher/course-details-form";
 import { CurriculumBuilder } from "@/components/teacher/curriculum-builder";
+import { QuizManager } from "@/components/teacher/quiz-manager";
 import { SubmitReviewButton } from "@/components/teacher/submit-review-button";
 
 export default async function EditCoursePage({
@@ -19,6 +21,8 @@ export default async function EditCoursePage({
 
   const [course, categories] = await Promise.all([getCourseForEdit(courseId, user.id), listCategories()]);
   if (!course) notFound();
+
+  const quizzes = await listQuizzesForEdit(courseId);
 
   const canSubmit = course.status === "DRAFT" || course.status === "REJECTED";
 
@@ -41,9 +45,11 @@ export default async function EditCoursePage({
         <TabsList>
           <TabsTrigger value="details">Details</TabsTrigger>
           <TabsTrigger value="curriculum">Curriculum</TabsTrigger>
+          <TabsTrigger value="quizzes">Quizzes</TabsTrigger>
         </TabsList>
         <TabsContent value="details" className="pt-4">
           <CourseDetailsForm
+            key={course.updatedAt.getTime()}
             courseId={course.id}
             categories={categories}
             course={{
@@ -63,6 +69,9 @@ export default async function EditCoursePage({
         </TabsContent>
         <TabsContent value="curriculum" className="pt-4">
           <CurriculumBuilder courseId={course.id} sections={course.sections} />
+        </TabsContent>
+        <TabsContent value="quizzes" className="pt-4">
+          <QuizManager courseId={course.id} quizzes={quizzes} />
         </TabsContent>
       </Tabs>
     </div>

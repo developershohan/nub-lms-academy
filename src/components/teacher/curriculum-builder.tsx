@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState } from "react";
+import { useActionState, useRef, useState } from "react";
 import { useFormStatus } from "react-dom";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useActionSuccess } from "@/hooks/use-action-success";
 import {
   createSectionAction,
   updateSectionAction,
@@ -34,15 +35,6 @@ type Lesson = {
 type Section = { id: string; title: string; lessons: Lesson[] };
 
 const initialState: ActionState = {};
-
-/** True only once an action has actually run (not on first mount), so callers can tell
- * "just succeeded" apart from "hasn't been submitted yet" - both look like `{}`. */
-function useActionSuccess(state: ActionState, onSuccess: () => void) {
-  useEffect(() => {
-    if (state !== initialState && !state.error) onSuccess();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state]);
-}
 
 function SubmitButton({ label, pendingLabel }: { label: string; pendingLabel: string }) {
   const { pending } = useFormStatus();
@@ -109,11 +101,11 @@ function LessonRow({ lesson }: { lesson: Lesson }) {
   const [updateState, updateAction] = useActionState(updateLessonAction, initialState);
   const [deleteState, deleteAction] = useActionState(deleteLessonAction, initialState);
 
-  useActionSuccess(updateState, () => {
+  useActionSuccess(updateState, initialState, () => {
     toast.success("Lesson updated");
     setEditing(false);
   });
-  useActionSuccess(deleteState, () => toast.success("Lesson deleted"));
+  useActionSuccess(deleteState, initialState, () => toast.success("Lesson deleted"));
 
   if (editing) {
     return (
@@ -159,7 +151,7 @@ function AddLessonForm({ sectionId }: { sectionId: string }) {
   const formRef = useRef<HTMLFormElement>(null);
   const [resetKey, setResetKey] = useState(0);
 
-  useActionSuccess(state, () => {
+  useActionSuccess(state, initialState, () => {
     toast.success("Lesson added");
     formRef.current?.reset();
     setResetKey((k) => k + 1); // remounts LessonFields so its Type selection also resets to Text
@@ -180,11 +172,11 @@ function SectionCard({ section }: { section: Section }) {
   const [renameState, renameAction] = useActionState(updateSectionAction, initialState);
   const [deleteState, deleteAction] = useActionState(deleteSectionAction, initialState);
 
-  useActionSuccess(renameState, () => {
+  useActionSuccess(renameState, initialState, () => {
     toast.success("Section renamed");
     setEditingTitle(false);
   });
-  useActionSuccess(deleteState, () => toast.success("Section deleted"));
+  useActionSuccess(deleteState, initialState, () => toast.success("Section deleted"));
 
   return (
     <Card>
@@ -231,7 +223,7 @@ function AddSectionForm({ courseId }: { courseId: string }) {
   const [state, formAction] = useActionState(createSectionAction, initialState);
   const formRef = useRef<HTMLFormElement>(null);
 
-  useActionSuccess(state, () => {
+  useActionSuccess(state, initialState, () => {
     toast.success("Section added");
     formRef.current?.reset();
   });

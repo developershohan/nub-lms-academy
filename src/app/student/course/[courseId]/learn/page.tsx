@@ -3,6 +3,7 @@ import { redirect, notFound } from "next/navigation";
 import { getCurrentUser, canAccessCourse } from "@/lib/permissions";
 import { getCourseForLearning } from "@/server/services/course-service";
 import { getCourseProgress, getLessonProgressMap } from "@/server/services/progress-service";
+import { listQuizzesForCourse } from "@/server/services/quiz-attempt-service";
 import { Progress } from "@/components/ui/progress";
 import { Badge } from "@/components/ui/badge";
 import { MarkCompleteButton } from "@/components/learning/mark-complete-button";
@@ -28,9 +29,10 @@ export default async function LearnPage({
   const course = await getCourseForLearning(courseId);
   if (!course) notFound();
 
-  const [progress, progressMap] = await Promise.all([
+  const [progress, progressMap, quizzes] = await Promise.all([
     getCourseProgress(user.id, courseId),
     getLessonProgressMap(user.id, courseId),
+    listQuizzesForCourse(courseId),
   ]);
 
   const allLessons = course.sections.flatMap((s) => s.lessons);
@@ -79,6 +81,22 @@ export default async function LearnPage({
               })}
             </div>
           ))}
+
+          {quizzes.length > 0 && (
+            <div className="space-y-1">
+              <p className="px-2 text-sm font-medium">Quizzes</p>
+              {quizzes.map((quiz) => (
+                <Link
+                  key={quiz.id}
+                  href={`/student/quiz/${quiz.id}`}
+                  className="flex items-center justify-between rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted"
+                >
+                  <span>{quiz.title}</span>
+                  <Badge variant="outline">{quiz._count.questions} Q</Badge>
+                </Link>
+              ))}
+            </div>
+          )}
         </aside>
 
         <main className="space-y-4">

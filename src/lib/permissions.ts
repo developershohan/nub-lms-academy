@@ -148,3 +148,20 @@ export async function canAccessLesson(userId: string | null, lessonId: string): 
   if (!userId) return false;
   return canAccessCourse(userId, lesson.section.courseId);
 }
+
+/** Whether the student can start a NEW attempt (course access + under maxAttempts). Past attempts
+ * always remain viewable regardless of this check. */
+export async function canAttemptQuiz(userId: string, quizId: string): Promise<boolean> {
+  const quiz = await prisma.quiz.findUnique({
+    where: { id: quizId },
+    select: { courseId: true, maxAttempts: true },
+  });
+  if (!quiz) return false;
+  if (!(await canAccessCourse(userId, quiz.courseId))) return false;
+  if (quiz.maxAttempts == null) return true;
+
+  const submittedCount = await prisma.quizAttempt.count({
+    where: { quizId, userId, status: "SUBMITTED" },
+  });
+  return submittedCount < quiz.maxAttempts;
+}
