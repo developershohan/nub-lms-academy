@@ -128,13 +128,25 @@ export async function canAccessCourse(userId: string, courseId: string): Promise
   const roles = user.roles.map((r) => r.role.name);
   if (hasPermission(roles, "admin:access")) return true;
 
-  const course = await prisma.course.findUnique({ where: { id: courseId }, select: { teacherId: true, status: true } });
+  const course = await prisma.course.findUnique({
+    where: { id: courseId },
+    select: { teacherId: true, status: true, isSubscriptionIncluded: true },
+  });
   if (!course) return false;
   if (course.teacherId === userId) return true;
   if (course.status !== "PUBLISHED") return false;
 
   const enrollment = await prisma.enrollment.findUnique({ where: { userId_courseId: { userId, courseId } } });
-  return enrollment?.status === "ACTIVE";
+  if (enrollment?.status === "ACTIVE") return true;
+
+  // Subscription access is live, not a one-time grant: it only holds while isSubscriptionIncluded
+  // is true and the subscription is currently ACTIVE, so it disappears on its own if either lapses -
+  // no Enrollment row is created for it, unlike a purchase or free enrollment.
+  if (course.isSubscriptionIncluded) {
+    const subscription = await prisma.subscription.findFirst({ where: { userId, status: "ACTIVE" } });
+    if (subscription) return true;
+  }
+  return false;
 }
 
 /** Preview lessons are visible to anyone (even signed out); everything else requires course access. */

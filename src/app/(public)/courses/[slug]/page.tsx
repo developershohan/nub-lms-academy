@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EnrollButton } from "@/components/course/enroll-button";
 import { WishlistButton } from "@/components/course/wishlist-button";
 import { ReviewForm } from "@/components/course/review-form";
+import { CheckoutButton } from "@/components/course/checkout-button";
 
 export default async function CourseDetailPage({
   params,
@@ -155,11 +156,7 @@ export default async function CourseDetailPage({
             </Button>
           )}
           {user && !isEnrolled && effectivePrice === 0 && <EnrollButton courseId={course.id} />}
-          {user && !isEnrolled && effectivePrice > 0 && (
-            <Button className="w-full" disabled>
-              Buy course (coming in Phase 6)
-            </Button>
-          )}
+          {user && !isEnrolled && effectivePrice > 0 && <CheckoutButton courseId={course.id} />}
 
           {user && <WishlistButton courseId={course.id} slug={slug} wishlisted={wishlisted} />}
         </CardContent>

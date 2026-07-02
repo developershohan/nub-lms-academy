@@ -9,11 +9,15 @@ function revalidateEnrollmentPaths(courseId: string, slug?: string) {
   if (slug) revalidatePath(`/courses/${slug}`);
 }
 
-/** Only free (price 0) courses can be self-enrolled - paid checkout arrives in Phase 6. */
+/** Only free courses (sale price or regular price of 0) can be self-enrolled - anything above $0
+ * goes through checkout (order-service.ts), which is the same "effective price" rule the course
+ * detail page uses to decide which button (Enroll vs Buy) to show in the first place. */
 export async function enrollInFreeCourse(userId: string, courseId: string) {
   const course = await prisma.course.findUnique({ where: { id: courseId } });
   if (!course || course.status !== "PUBLISHED") return { error: "Course not available" } as const;
-  if (Number(course.price) > 0) return { error: "This course requires payment, which isn't available yet" } as const;
+
+  const effectivePrice = Number(course.salePrice ?? course.price);
+  if (effectivePrice > 0) return { error: "This course requires payment - use the buy button instead" } as const;
 
   const existing = await prisma.enrollment.findUnique({ where: { userId_courseId: { userId, courseId } } });
   if (existing) return { error: "Already enrolled" } as const;
