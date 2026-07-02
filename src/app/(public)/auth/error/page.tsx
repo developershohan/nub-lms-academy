@@ -1,7 +1,3 @@
-"use client";
-
-import { Suspense } from "react";
-import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -13,17 +9,12 @@ const MESSAGES: Record<string, string> = {
   Default: "Something went wrong while signing you in.",
 };
 
-export default function AuthErrorPage() {
-  return (
-    <Suspense>
-      <AuthErrorContent />
-    </Suspense>
-  );
-}
-
-function AuthErrorContent() {
-  const searchParams = useSearchParams();
-  const code = searchParams.get("error") ?? "Default";
+export default async function AuthErrorPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error: code = "Default" } = await searchParams;
   const message = MESSAGES[code] ?? MESSAGES.Default;
 
   return (

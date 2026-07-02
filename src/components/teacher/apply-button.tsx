@@ -1,30 +1,28 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { useActionState } from "react";
+import { useFormStatus } from "react-dom";
+import { applyTeacherAction, type ApplyTeacherState } from "@/app/teacher/apply/actions";
 import { Button } from "@/components/ui/button";
 
-export function ApplyButton() {
-  const router = useRouter();
-  const [loading, setLoading] = useState(false);
+const initialState: ApplyTeacherState = {};
 
-  async function apply() {
-    setLoading(true);
-    const res = await fetch("/api/v1/users/apply-teacher", { method: "POST" });
-    setLoading(false);
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      toast.error(body?.error ?? "Could not submit application");
-      return;
-    }
-    toast.success("Application submitted");
-    router.refresh();
-  }
+function SubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" disabled={pending}>
+      {pending ? "Submitting..." : "Apply to become a teacher"}
+    </Button>
+  );
+}
+
+export function ApplyButton() {
+  const [state, formAction] = useActionState(applyTeacherAction, initialState);
 
   return (
-    <Button onClick={apply} disabled={loading}>
-      {loading ? "Submitting..." : "Apply to become a teacher"}
-    </Button>
+    <form action={formAction}>
+      <SubmitButton />
+      {state.error && <p className="mt-2 text-sm text-destructive">{state.error}</p>}
+    </form>
   );
 }

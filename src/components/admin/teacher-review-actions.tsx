@@ -1,34 +1,40 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { useActionState } from "react";
+import { useFormStatus } from "react-dom";
+import { approveTeacherAction, rejectTeacherAction, type ReviewState } from "@/app/admin/teachers/actions";
 import { Button } from "@/components/ui/button";
 
-export function TeacherReviewActions({ teacherId }: { teacherId: string }) {
-  const router = useRouter();
-  const [loading, setLoading] = useState<"approve" | "reject" | null>(null);
+const initialState: ReviewState = {};
 
-  async function review(action: "approve" | "reject") {
-    setLoading(action);
-    const res = await fetch(`/api/v1/admin/teachers/${teacherId}/${action}`, { method: "POST" });
-    setLoading(null);
-    if (!res.ok) {
-      toast.error("Action failed");
-      return;
-    }
-    toast.success(action === "approve" ? "Teacher approved" : "Application rejected");
-    router.refresh();
-  }
+function ReviewButton({ label, variant }: { label: string; variant?: "outline" }) {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" size="sm" variant={variant} disabled={pending}>
+      {label}
+    </Button>
+  );
+}
+
+export function TeacherReviewActions({ teacherId }: { teacherId: string }) {
+  const [approveState, approveFormAction] = useActionState(approveTeacherAction, initialState);
+  const [rejectState, rejectFormAction] = useActionState(rejectTeacherAction, initialState);
 
   return (
-    <div className="flex gap-2">
-      <Button size="sm" onClick={() => review("approve")} disabled={loading !== null}>
-        Approve
-      </Button>
-      <Button size="sm" variant="outline" onClick={() => review("reject")} disabled={loading !== null}>
-        Reject
-      </Button>
+    <div className="flex flex-col items-end gap-1">
+      <div className="flex gap-2">
+        <form action={approveFormAction}>
+          <input type="hidden" name="teacherId" value={teacherId} />
+          <ReviewButton label="Approve" />
+        </form>
+        <form action={rejectFormAction}>
+          <input type="hidden" name="teacherId" value={teacherId} />
+          <ReviewButton label="Reject" variant="outline" />
+        </form>
+      </div>
+      {(approveState.error || rejectState.error) && (
+        <p className="text-sm text-destructive">{approveState.error ?? rejectState.error}</p>
+      )}
     </div>
   );
 }

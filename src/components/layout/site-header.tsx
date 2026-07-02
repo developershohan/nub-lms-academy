@@ -1,17 +1,8 @@
-"use client";
-
 import Link from "next/link";
-import { useSession, signOut } from "next-auth/react";
+import { auth } from "@/lib/auth";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { UserMenu } from "@/components/layout/user-menu";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-  DropdownMenuSeparator,
-} from "@/components/ui/dropdown-menu";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 const ROLE_HOME: Record<string, string> = {
   SUPER_ADMIN: "/admin/dashboard",
@@ -20,8 +11,8 @@ const ROLE_HOME: Record<string, string> = {
   STUDENT: "/student/dashboard",
 };
 
-export function SiteHeader() {
-  const { data: session, status } = useSession();
+export async function SiteHeader() {
+  const session = await auth();
   const dashboardHref = session?.user.roles?.map((r) => ROLE_HOME[r]).find(Boolean) ?? "/student/dashboard";
 
   return (
@@ -36,22 +27,13 @@ export function SiteHeader() {
         </nav>
         <div className="flex items-center gap-2">
           <ThemeToggle />
-          {status === "authenticated" ? (
-            <DropdownMenu>
-              <DropdownMenuTrigger render={<Button variant="ghost" size="icon" className="rounded-full" />}>
-                <Avatar className="size-8">
-                  <AvatarImage src={session.user.image ?? undefined} />
-                  <AvatarFallback>{session.user.name?.[0] ?? session.user.email?.[0]}</AvatarFallback>
-                </Avatar>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem render={<Link href={dashboardHref} />}>Dashboard</DropdownMenuItem>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => signOut({ callbackUrl: "/" })}>
-                  Log out
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+          {session?.user ? (
+            <UserMenu
+              name={session.user.name}
+              email={session.user.email}
+              image={session.user.image}
+              dashboardHref={dashboardHref}
+            />
           ) : (
             <>
               <Button variant="ghost" render={<Link href="/login" />}>

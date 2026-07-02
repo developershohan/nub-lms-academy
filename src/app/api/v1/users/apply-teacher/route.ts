@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import { prisma } from "@/lib/prisma";
+import { applyForTeacher } from "@/server/services/teacher-service";
 
 export async function POST() {
   const session = await auth();
@@ -8,11 +8,9 @@ export async function POST() {
     return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
   }
 
-  const existing = await prisma.teacherProfile.findUnique({ where: { userId: session.user.id } });
-  if (existing) {
-    return NextResponse.json({ error: "Application already submitted" }, { status: 409 });
+  const result = await applyForTeacher(session.user.id);
+  if ("error" in result) {
+    return NextResponse.json({ error: result.error }, { status: 409 });
   }
-
-  const profile = await prisma.teacherProfile.create({ data: { userId: session.user.id } });
-  return NextResponse.json({ status: profile.status });
+  return NextResponse.json({ status: result.status });
 }
