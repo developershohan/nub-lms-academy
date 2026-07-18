@@ -17,6 +17,11 @@ export function useSocket() {
   useEffect(() => {
     if (!sharedSocket) {
       sharedSocket = io(process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:3001", {
+        // Some hosts' free-tier proxies don't cleanly pass through the HTTP Upgrade handshake
+        // that a polling->websocket transport switch needs, even though plain HTTP (polling)
+        // works fine - the socket connects, then gets killed a moment later while upgrading.
+        // Staying on polling trades a little latency for connections that don't randomly drop.
+        transports: ["polling"],
         auth: async (cb) => {
           const res = await fetch("/api/v1/socket-token");
           const data = await res.json();
