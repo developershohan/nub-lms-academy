@@ -9,7 +9,11 @@
     "postinstall": "prisma generate",
     "start": "next start",
     "start:socket": "tsx socket-server/index.ts",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "check": "npm run lint && npm run typecheck && npm run test:run && npm run build"
   },
   "dependencies": {
     "@auth/prisma-adapter": "^2.11.2",
@@ -55,6 +59,7 @@
     "eslint-config-next": "16.2.9",
     "prisma": "^7.8.0",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.10"
   }
 }
