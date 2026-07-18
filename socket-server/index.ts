@@ -15,26 +15,37 @@ const INTERNAL_SECRET = process.env.SOCKET_INTERNAL_SECRET;
  * no direct handle on this process's `io` instance, so this HTTP hop is the bridge between them.
  * Guarded by a shared secret since it's an unauthenticated write into arbitrary rooms. */
 const httpServer = http.createServer((req, res) => {
-  if (req.method !== "POST" || req.url !== "/internal/emit") return;
+  if (req.method === "POST" && req.url === "/internal/emit") {
+    if (!INTERNAL_SECRET || req.headers["x-internal-secret"] !== INTERNAL_SECRET) {
+      res.writeHead(401).end();
+      return;
+    }
 
-  if (!INTERNAL_SECRET || req.headers["x-internal-secret"] !== INTERNAL_SECRET) {
-    res.writeHead(401).end();
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      try {
+        const { room, event, payload } = JSON.parse(body) as { room?: unknown; event?: unknown; payload?: unknown };
+        if (typeof room === "string" && typeof event === "string") {
+          io.to(room).emit(event, payload);
+        }
+        res.writeHead(200).end();
+      } catch {
+        res.writeHead(400).end();
+      }
+    });
     return;
   }
 
-  let body = "";
-  req.on("data", (chunk) => (body += chunk));
-  req.on("end", () => {
-    try {
-      const { room, event, payload } = JSON.parse(body) as { room?: unknown; event?: unknown; payload?: unknown };
-      if (typeof room === "string" && typeof event === "string") {
-        io.to(room).emit(event, payload);
-      }
-      res.writeHead(200).end();
-    } catch {
-      res.writeHead(400).end();
-    }
-  });
+  // Socket.IO registers its own 'request' listener on this same server (see `new Server(httpServer, ...)`
+  // below) and handles anything under /socket.io itself - leave those alone so it can respond.
+  if (req.url?.startsWith("/socket.io")) return;
+
+  // Anything else - most importantly Render/Railway's health-check probe hitting "/" - needs a
+  // real response. Leaving this unhandled means the request just hangs forever, which is why the
+  // host's port scanner reports "no open ports" and never routes traffic here even though the
+  // process is up and Socket.IO itself works fine.
+  res.writeHead(200, { "Content-Type": "text/plain" }).end("ok");
 });
 
 const io = new Server(httpServer, {
