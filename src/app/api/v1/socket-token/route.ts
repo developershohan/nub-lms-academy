@@ -4,6 +4,8 @@ import { createSocketToken } from "@/lib/socket-token";
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   let session;
   try {

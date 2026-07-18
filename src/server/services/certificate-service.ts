@@ -9,10 +9,21 @@ function generateCertificateNumber() {
   return `NUB-${randomBytes(6).toString("hex").toUpperCase()}`;
 }
 
-/** Idempotent: an existing, non-revoked certificate is returned as-is rather than duplicated. */
+/**
+ * Idempotent: an existing, non-revoked certificate is returned as-is rather than duplicated.
+ *
+ * A revoked certificate is never resurrected here - revocation is a deliberate admin action
+ * (e.g. academic dishonesty), and this function is reachable directly from student-initiated
+ * requests (see student/certificates/actions.ts), so silently re-issuing on revoked=true would
+ * let a student undo an admin's revocation just by re-triggering "generate certificate".
+ * Un-revoking is intentionally not exposed anywhere - only revokeCertificate exists.
+ */
 export async function generateCertificate(userId: string, courseId: string) {
   const existing = await prisma.certificate.findUnique({ where: { userId_courseId: { userId, courseId } } });
-  if (existing && !existing.revoked) return { ok: true, certificate: existing } as const;
+  if (existing) {
+    if (existing.revoked) return { error: "This certificate has been revoked" } as const;
+    return { ok: true, certificate: existing } as const;
+  }
 
   if (!(await canGenerateCertificate(userId, courseId))) {
     return { error: "You haven't met the requirements for a certificate yet" } as const;
@@ -24,20 +35,18 @@ export async function generateCertificate(userId: string, courseId: string) {
     prisma.enrollment.findUniqueOrThrow({ where: { userId_courseId: { userId, courseId } } }),
   ]);
 
-  const data = {
-    certificateNumber: generateCertificateNumber(),
-    studentName: user.name ?? user.email,
-    courseTitle: course.title,
-    teacherName: course.teacher.name ?? "Instructor",
-    completedAt: enrollment.completedAt!,
-    issuedAt: new Date(),
-    revoked: false,
-    revokedAt: null,
-  };
-
-  const certificate = existing
-    ? await prisma.certificate.update({ where: { id: existing.id }, data })
-    : await prisma.certificate.create({ data: { ...data, userId, courseId } });
+  const certificate = await prisma.certificate.create({
+    data: {
+      certificateNumber: generateCertificateNumber(),
+      studentName: user.name ?? user.email,
+      courseTitle: course.title,
+      teacherName: course.teacher.name ?? "Instructor",
+      completedAt: enrollment.completedAt!,
+      issuedAt: new Date(),
+      userId,
+      courseId,
+    },
+  });
 
   revalidatePath("/student/certificates");
   revalidatePath("/admin/certificates");

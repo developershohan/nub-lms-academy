@@ -2,10 +2,11 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { signOut } from "next-auth/react";
+import { ArrowLeft, UserCircle } from "lucide-react";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { NotificationBell } from "@/components/notifications/notification-bell";
+import { SignOutButton } from "@/components/layout/sign-out-button";
 import { cn } from "@/lib/utils";
 
 type NavItem = { href: string; label: string };
@@ -36,6 +37,13 @@ export function DashboardShell({
   return (
     <div className="flex min-h-screen">
       <aside className="hidden w-56 shrink-0 border-r p-4 sm:block">
+        <Link
+          href="/"
+          className="mb-4 flex items-center gap-1.5 px-2 text-xs text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="size-3.5" />
+          Back to site
+        </Link>
         <div className="mb-6 px-2 font-semibold">{title}</div>
         <nav className="space-y-1">
           {navItems.map((item) => (
@@ -56,13 +64,17 @@ export function DashboardShell({
       </aside>
       <div className="flex-1">
         <header className="flex h-14 items-center justify-between border-b px-4">
-          <span className="font-semibold sm:hidden">{title}</span>
+          <Link href="/" className="flex items-center gap-1.5 text-sm font-semibold sm:hidden">
+            <ArrowLeft className="size-3.5" />
+            {title}
+          </Link>
           <div className="ml-auto flex items-center gap-2">
             <NotificationBell initialNotifications={notifications} initialUnreadCount={unreadCount} />
-            <ThemeToggle />
-            <Button variant="ghost" size="sm" onClick={() => signOut({ callbackUrl: "/" })}>
-              Log out
+            <Button variant="ghost" size="icon" render={<Link href="/profile" />} aria-label="Profile">
+              <UserCircle className="size-4" />
             </Button>
+            <ThemeToggle />
+            <SignOutButton />
           </div>
         </header>
         <main className="p-6">{children}</main>

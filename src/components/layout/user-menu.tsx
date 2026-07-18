@@ -33,6 +33,7 @@ export function UserMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem render={<Link href={dashboardHref} />}>Dashboard</DropdownMenuItem>
+        <DropdownMenuItem render={<Link href="/profile" />}>Profile</DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem onClick={() => signOut({ callbackUrl: "/" })}>Log out</DropdownMenuItem>
       </DropdownMenuContent>

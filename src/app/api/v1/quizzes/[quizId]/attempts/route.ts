@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { listAttemptHistory, startQuizAttempt, submitQuizAttempt } from "@/server/services/quiz-attempt-service";
+import { parseJsonBody } from "@/lib/http/json";
+
+export const dynamic = "force-dynamic";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ quizId: string }> }) {
   const session = await auth();
@@ -24,16 +27,17 @@ export async function POST(_request: Request, { params }: { params: Promise<{ qu
 
 const submitSchema = z.object({
   attemptId: z.string().min(1),
-  answers: z.array(z.object({ questionId: z.string().min(1), selectedOptionIds: z.array(z.string()) })),
+  answers: z
+    .array(z.object({ questionId: z.string().min(1), selectedOptionIds: z.array(z.string()).max(20) }))
+    .max(200),
 });
 
 export async function PATCH(request: Request) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
-  const body = await request.json();
-  const parsed = submitSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
+  const parsed = await parseJsonBody(request, submitSchema);
+  if ("response" in parsed) return parsed.response;
 
   const formData = new FormData();
   for (const answer of parsed.data.answers) {

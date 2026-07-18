@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 import { canAdminAccess } from "@/lib/permissions";
 import { renderCertificatePdf } from "@/lib/certificate-pdf";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(_request: Request, { params }: { params: Promise<{ certificateId: string }> }) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });

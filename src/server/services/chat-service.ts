@@ -1,7 +1,7 @@
 import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
-import { canAccessConversation, canAccessCourse, canManageCourse } from "@/lib/permissions";
+import { canAccessConversation, canAccessCourse, canManageCourse, canAdminAccess } from "@/lib/permissions";
 import { createNotifications } from "@/server/services/notification-service";
 import { logAudit } from "@/lib/audit";
 import type { RoleName } from "@/generated/prisma/client";
@@ -293,9 +293,7 @@ export function listRecentMessagesForAdmin(limit = 50) {
 }
 
 export async function hideMessage(actorId: string, messageId: string) {
-  const actor = await prisma.user.findUnique({ where: { id: actorId }, include: { roles: { include: { role: true } } } });
-  const roles = actor?.roles.map((r) => r.role.name) ?? [];
-  if (!roles.includes("ADMIN") && !roles.includes("SUPER_ADMIN")) return { error: "Forbidden" } as const;
+  if (!(await canAdminAccess(actorId))) return { error: "Forbidden" } as const;
 
   await prisma.message.update({ where: { id: messageId }, data: { deletedAt: new Date() } });
   await logAudit(actorId, "message:moderate", "Message", messageId);

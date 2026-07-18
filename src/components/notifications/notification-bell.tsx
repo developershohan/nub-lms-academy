@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -60,9 +61,17 @@ export function NotificationBell({
 
   async function handleOpenNotification(notification: NotificationItem) {
     if (notification.status === "UNREAD") {
-      await markNotificationReadAction(notification.id);
-      setNotifications((prev) => prev.map((n) => (n.id === notification.id ? { ...n, status: "READ" } : n)));
-      setUnreadCount((prev) => Math.max(0, prev - 1));
+      try {
+        await markNotificationReadAction(notification.id);
+        setNotifications((prev) => prev.map((n) => (n.id === notification.id ? { ...n, status: "READ" } : n)));
+        setUnreadCount((prev) => Math.max(0, prev - 1));
+      } catch {
+        // Clicking a notification whose link points outside the current role area (e.g. a
+        // student approved as teacher, linked to /teacher/dashboard) unmounts this component
+        // mid-navigation, aborting this request - marking read is best-effort, not required for
+        // the navigation itself, so a failure here must never surface as an unhandled rejection
+        // (which Next's dev overlay - and potentially an error boundary - would otherwise show).
+      }
     }
   }
 
@@ -83,14 +92,16 @@ export function NotificationBell({
         )}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-80">
-        <DropdownMenuLabel className="flex items-center justify-between">
-          Notifications
-          {unreadCount > 0 && (
-            <button onClick={handleMarkAllRead} className="text-xs font-normal text-muted-foreground underline">
-              Mark all read
-            </button>
-          )}
-        </DropdownMenuLabel>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="flex items-center justify-between">
+            Notifications
+            {unreadCount > 0 && (
+              <button onClick={handleMarkAllRead} className="text-xs font-normal text-muted-foreground underline">
+                Mark all read
+              </button>
+            )}
+          </DropdownMenuLabel>
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
         {notifications.length === 0 && (
           <p className="px-2 py-3 text-center text-sm text-muted-foreground">No notifications yet.</p>

@@ -1,0 +1,24 @@
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    # Major version bumps for these need a deliberate compatibility pass (Auth.js is still beta,
+    # Prisma/Next major bumps have historically needed code changes in this repo) - Dependabot
+    # should still flag them, just not auto-open a PR that looks routine when it isn't.
+    ignore:
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "next-auth"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "prisma"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@prisma/client"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { courseDetailsSchema } from "@/lib/validations/course";
+import { parseJsonBody } from "@/lib/http/json";
 import { getCourseDetailForViewer, updateCourseDetails } from "@/server/services/course-service";
 
 export async function GET(_request: Request, { params }: { params: Promise<{ courseId: string }> }) {
@@ -13,14 +14,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ cou
 
 export async function PATCH(request: Request, { params }: { params: Promise<{ courseId: string }> }) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!session?.user?.id) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
   const { courseId } = await params;
-  const body = await request.json();
-  const parsed = courseDetailsSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
-  }
+  const parsed = await parseJsonBody(request, courseDetailsSchema);
+  if ("response" in parsed) return parsed.response;
 
   const result = await updateCourseDetails(courseId, session.user.id, parsed.data);
   if ("error" in result) return NextResponse.json({ error: result.error }, { status: 403 });
