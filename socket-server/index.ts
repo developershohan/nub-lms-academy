@@ -73,7 +73,11 @@ io.on("connection", (socket) => {
   });
 });
 
-httpServer.listen(PORT);
+// Binding the host explicitly matters on Render/Railway: listen(port) with no host can bind
+// IPv6-only in their containers, and their port-scanner only looks for 0.0.0.0 - without this the
+// scanner never sees the app come up and the deploy gets stuck (502s forever even though the
+// process is actually running fine).
+httpServer.listen(PORT, "0.0.0.0");
 console.log(`Socket.IO chat server listening on :${PORT} (CORS origin: ${CORS_ORIGIN})`);
 if (!INTERNAL_SECRET) {
   console.warn("SOCKET_INTERNAL_SECRET is not set - realtime pushes from the Next.js app are disabled.");
