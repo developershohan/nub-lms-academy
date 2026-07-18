@@ -1,8 +1,9 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useState } from "react";
 import { useFormStatus } from "react-dom";
-import { loginAction, type LoginState } from "./actions";
+import { toast } from "sonner";
+import { loginAction, resendVerificationAction, type LoginState } from "./actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,6 +15,27 @@ function SubmitButton() {
   return (
     <Button type="submit" className="w-full" disabled={pending}>
       {pending ? "Logging in..." : "Log in"}
+    </Button>
+  );
+}
+
+function ResendVerificationButton({ email }: { email: string }) {
+  const [sent, setSent] = useState(false);
+
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="w-full"
+      disabled={sent}
+      onClick={async () => {
+        setSent(true);
+        await resendVerificationAction(email);
+        toast.success("Verification email sent - check your inbox.");
+      }}
+    >
+      {sent ? "Verification email sent" : "Resend verification email"}
     </Button>
   );
 }
@@ -34,6 +56,7 @@ export function LoginForm({ callbackUrl }: { callbackUrl: string }) {
       </div>
       {state.error && <p className="text-sm text-destructive">{state.error}</p>}
       <SubmitButton />
+      {state.unverifiedEmail && <ResendVerificationButton email={state.unverifiedEmail} />}
     </form>
   );
 }

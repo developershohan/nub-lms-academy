@@ -26,7 +26,7 @@ export function RegisterForm() {
 
   useEffect(() => {
     if (state.success) {
-      toast.success("Account created. Please log in.");
+      toast.success("Account created. Check your email to verify it before logging in.");
       router.push("/login");
     }
   }, [state.success, router]);

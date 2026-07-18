@@ -1,4 +1,4 @@
-import NextAuth from "next-auth";
+import NextAuth, { CredentialsSignin } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
 import GitHub from "next-auth/providers/github";
@@ -7,6 +7,13 @@ import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { loginSchema } from "@/lib/validations/auth";
 import type { RoleName } from "@/generated/prisma/client";
+
+/** Thrown from authorize() when credentials are correct but the email isn't verified yet - kept
+ * distinct from a plain wrong-password failure so the login form can offer a "resend
+ * verification email" action instead of just "invalid credentials". */
+export class EmailNotVerifiedError extends CredentialsSignin {
+  code = "email_not_verified";
+}
 
 async function assignDefaultRole(userId: string) {
   const studentRole = await prisma.role.upsert({
@@ -57,13 +64,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const valid = await bcrypt.compare(parsed.data.password, user.passwordHash);
         if (!valid) return null;
 
+        if (!user.emailVerified) throw new EmailNotVerifiedError();
+
         return { id: user.id, email: user.email, name: user.name, image: user.image };
       },
     }),
   ],
   events: {
     async createUser({ user }) {
-      if (user.id) await assignDefaultRole(user.id);
+      if (!user.id) return;
+      await assignDefaultRole(user.id);
+      // Only OAuth sign-ins reach this event (credentials registration inserts the user directly,
+      // see auth-service.ts's registerUser) - the provider has already confirmed the email
+      // address, so there's nothing for our own verification flow to add here.
+      await prisma.user.update({ where: { id: user.id }, data: { emailVerified: new Date() } });
     },
   },
   callbacks: {

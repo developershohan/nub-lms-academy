@@ -6,7 +6,10 @@ export default auth((req) => {
   const status = req.auth?.user?.status;
 
   const isProtected =
-    pathname.startsWith("/student") || pathname.startsWith("/teacher") || pathname.startsWith("/admin");
+    pathname.startsWith("/student") ||
+    pathname.startsWith("/teacher") ||
+    pathname.startsWith("/admin") ||
+    pathname.startsWith("/profile");
   if (!isProtected) return NextResponse.next();
 
   if (status === "ACTIVE") return NextResponse.next();
@@ -23,5 +26,5 @@ export default auth((req) => {
 // change apply immediately instead.
 
 export const config = {
-  matcher: ["/student/:path*", "/teacher/:path*", "/admin/:path*"],
+  matcher: ["/student/:path*", "/teacher/:path*", "/admin/:path*", "/profile/:path*"],
 };
