@@ -1,6 +1,7 @@
 import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { emitRealtime } from "@/lib/realtime";
 
 export type NotificationInput = {
   userId: string;
@@ -11,9 +12,12 @@ export type NotificationInput = {
 };
 
 /** Fire-and-forget from within another service's transaction path - callers don't await UI
- * revalidation here since the recipient isn't the one making the current request. */
-export function createNotifications(notifications: NotificationInput[]) {
-  return prisma.notification.createMany({ data: notifications });
+ * revalidation here since the recipient isn't the one making the current request. Pushes each
+ * recipient a live "notification:new" so an already-open tab updates without a manual refresh. */
+export async function createNotifications(notifications: NotificationInput[]) {
+  const result = await prisma.notification.createMany({ data: notifications });
+  for (const n of notifications) emitRealtime(`user:${n.userId}`, "notification:new");
+  return result;
 }
 
 export function listNotificationsForUser(userId: string, limit = 20) {

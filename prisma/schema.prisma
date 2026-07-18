@@ -730,3 +730,10 @@ model Notification {
 
   @@index([userId, status])
 }
+
+/** Single-row table (id is always "singleton") for platform-wide toggles admins control at runtime. */
+model PlatformSetting {
+  id                  String   @id @default("singleton")
+  autoApprovePayments Boolean  @default(true)
+  updatedAt           DateTime @updatedAt
+}

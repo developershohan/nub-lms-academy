@@ -1,9 +1,11 @@
 import { listCoursesForAdmin } from "@/server/services/course-service";
+import { requireAdmin } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CourseReviewActions } from "@/components/admin/course-review-actions";
 
 export default async function AdminCoursesPage() {
+  await requireAdmin();
   const courses = await listCoursesForAdmin();
 
   return (

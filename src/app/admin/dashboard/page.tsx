@@ -1,7 +1,9 @@
 import { prisma } from "@/lib/prisma";
+import { requireAdmin } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 export default async function AdminDashboardPage() {
+  await requireAdmin();
   const [userCount, pendingTeachers] = await Promise.all([
     prisma.user.count(),
     prisma.teacherProfile.count({ where: { status: "PENDING" } }),

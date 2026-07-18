@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
 import { z } from "zod";
+import { getCurrentUser, hasRole } from "@/lib/permissions";
 import { listPublishedCourses, createCourse } from "@/server/services/course-service";
 
 export async function GET(request: Request) {
@@ -15,8 +15,10 @@ export async function GET(request: Request) {
 const createSchema = z.object({ title: z.string().min(3) });
 
 export async function POST(request: Request) {
-  const session = await auth();
-  if (!session?.user?.id || !session.user.roles.includes("TEACHER")) {
+  // Re-checks the role against the DB rather than trusting the (possibly stale) JWT claim -
+  // a demoted teacher's existing session shouldn't keep create access until they re-login.
+  const user = await getCurrentUser();
+  if (!user || !hasRole(user.roles, "TEACHER")) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
@@ -26,6 +28,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
   }
 
-  const course = await createCourse(session.user.id, parsed.data.title);
+  const course = await createCourse(user.id, parsed.data.title);
   return NextResponse.json({ course }, { status: 201 });
 }

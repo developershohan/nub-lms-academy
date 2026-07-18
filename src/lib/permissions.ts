@@ -1,4 +1,5 @@
 import "server-only";
+import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import type { RoleName } from "@/generated/prisma/client";
@@ -87,6 +88,24 @@ export function hasRole(roles: RoleName[], role: RoleName) {
 
 export function hasPermission(roles: RoleName[], permission: Permission) {
   return roles.some((role) => ROLE_PERMISSIONS[role]?.includes(permission));
+}
+
+/**
+ * Layouts don't re-run their auth check on client-side navigation between sibling routes, so any
+ * page rendering sensitive data must re-verify the current user itself rather than trusting the
+ * parent layout alone - call this at the top of every admin page.
+ */
+export async function requireAdmin() {
+  const user = await getCurrentUser();
+  if (!user || !hasPermission(user.roles, "admin:access")) redirect("/login");
+  return user;
+}
+
+/** Same reasoning as requireAdmin - call at the top of every teacher-only page. */
+export async function requireTeacher() {
+  const user = await getCurrentUser();
+  if (!user || !(hasRole(user.roles, "TEACHER") || hasRole(user.roles, "SUPER_ADMIN"))) redirect("/login");
+  return user;
 }
 
 export async function canAdminAccess(userId: string): Promise<boolean> {

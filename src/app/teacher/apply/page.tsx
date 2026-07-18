@@ -8,9 +8,10 @@ export default async function TeacherApplyPage() {
   const session = await auth();
   if (!session?.user?.id) redirect("/login");
 
-  if (session.user.roles.includes("TEACHER")) redirect("/teacher/dashboard");
-
   const profile = await prisma.teacherProfile.findUnique({ where: { userId: session.user.id } });
+  // Reads the application record itself rather than the (possibly stale) JWT role claim, so an
+  // approval takes effect on the very next load instead of requiring a fresh login.
+  if (profile?.status === "APPROVED") redirect("/teacher/dashboard");
 
   return (
     <div className="mx-auto flex min-h-[70vh] max-w-sm items-center justify-center px-4">

@@ -1,4 +1,5 @@
 import { listPlansForAdmin, listSubscriptionsForAdmin } from "@/server/services/subscription-service";
+import { requireAdmin } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreatePlanForm, PlanStatusToggle } from "@/components/admin/subscription-plan-manager";
@@ -10,6 +11,7 @@ const STATUS_VARIANT: Record<string, "secondary" | "outline" | "destructive"> = 
 };
 
 export default async function AdminSubscriptionsPage() {
+  await requireAdmin();
   const [plans, subscriptions] = await Promise.all([listPlansForAdmin(), listSubscriptionsForAdmin()]);
 
   return (

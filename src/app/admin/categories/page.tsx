@@ -1,8 +1,10 @@
 import { listCategories } from "@/server/services/category-service";
+import { requireAdmin } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CreateCategoryForm, DeleteCategoryButton } from "@/components/admin/category-manager";
 
 export default async function AdminCategoriesPage() {
+  await requireAdmin();
   const categories = await listCategories();
 
   return (

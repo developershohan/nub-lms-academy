@@ -1,8 +1,10 @@
 import { prisma } from "@/lib/prisma";
+import { requireAdmin } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { TeacherReviewActions } from "@/components/admin/teacher-review-actions";
 
 export default async function AdminTeachersPage() {
+  await requireAdmin();
   const pending = await prisma.teacherProfile.findMany({
     where: { status: "PENDING" },
     include: { user: true },

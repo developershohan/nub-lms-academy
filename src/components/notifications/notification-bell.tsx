@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Bell } from "lucide-react";
 import { useSocket } from "@/hooks/use-socket";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ export function NotificationBell({
   initialUnreadCount: number;
 }) {
   const { socket } = useSocket();
+  const router = useRouter();
   const [notifications, setNotifications] = useState(initialNotifications);
   const [unreadCount, setUnreadCount] = useState(initialUnreadCount);
 
@@ -45,12 +47,16 @@ export function NotificationBell({
           setNotifications(data.notifications ?? []);
           setUnreadCount(data.unreadCount ?? 0);
         });
+      // Whatever triggered this notification (a role change, a new application, a payment...)
+      // likely changed data on the page the user is currently looking at too - re-render it with
+      // fresh server data instead of making them hit refresh themselves.
+      router.refresh();
     };
     socket.on("notification:new", refresh);
     return () => {
       socket.off("notification:new", refresh);
     };
-  }, [socket]);
+  }, [socket, router]);
 
   async function handleOpenNotification(notification: NotificationItem) {
     if (notification.status === "UNREAD") {

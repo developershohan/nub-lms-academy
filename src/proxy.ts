@@ -1,36 +1,26 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
-import type { RoleName } from "@/generated/prisma/client";
-
-const ROLE_PREFIXES: [string, RoleName][] = [
-  ["/student", "STUDENT"],
-  ["/teacher", "TEACHER"],
-  ["/admin", "ADMIN"],
-];
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;
-  const roles = req.auth?.user?.roles ?? [];
   const status = req.auth?.user?.status;
 
-  function redirectToLogin() {
-    const loginUrl = new URL("/login", req.url);
-    loginUrl.searchParams.set("callbackUrl", pathname);
-    return NextResponse.redirect(loginUrl);
-  }
+  const isProtected =
+    pathname.startsWith("/student") || pathname.startsWith("/teacher") || pathname.startsWith("/admin");
+  if (!isProtected) return NextResponse.next();
 
-  // Any authenticated, active user can apply to become a teacher - not just existing teachers.
-  if (pathname.startsWith("/teacher/apply")) {
-    return status === "ACTIVE" ? NextResponse.next() : redirectToLogin();
-  }
+  if (status === "ACTIVE") return NextResponse.next();
 
-  const match = ROLE_PREFIXES.find(([prefix]) => pathname.startsWith(prefix));
-  if (!match) return NextResponse.next();
-
-  const [, requiredRole] = match;
-  const allowed = status === "ACTIVE" && (roles.includes(requiredRole) || roles.includes("SUPER_ADMIN"));
-  return allowed ? NextResponse.next() : redirectToLogin();
+  const loginUrl = new URL("/login", req.url);
+  loginUrl.searchParams.set("callbackUrl", pathname);
+  return NextResponse.redirect(loginUrl);
 });
+
+// Role checks intentionally happen only in each page/layout (via getCurrentUser(), which
+// re-reads the DB), not here. The JWT's `roles` claim is only refreshed at sign-in, so a role
+// change (e.g. a teacher application being approved) wouldn't take effect here until the user
+// logged out and back in - the DB-backed check in every admin/teacher page is what makes a role
+// change apply immediately instead.
 
 export const config = {
   matcher: ["/student/:path*", "/teacher/:path*", "/admin/:path*"],

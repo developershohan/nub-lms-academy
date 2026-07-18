@@ -6,16 +6,22 @@ import { io, type Socket } from "socket.io-client";
 let sharedSocket: Socket | null = null;
 
 /** One shared connection per browser tab (not per component) so a dashboard page that renders
- * both a NotificationBell and a ChatShell doesn't open two sockets. The cookie-based NextAuth
- * session is sent automatically via withCredentials, since the socket server trusts the same
- * "authjs.session-token" cookie the Next.js app set (see socket-server/auth.ts). */
+ * both a NotificationBell and a ChatShell doesn't open two sockets. Auth uses a short-lived
+ * signed token (see /api/v1/socket-token) fetched fresh on every (re)connect attempt, rather
+ * than the NextAuth session cookie - the socket server can live on a different domain than the
+ * Next.js app in production, and browsers don't send one domain's cookies to another (see
+ * socket-server/auth.ts). */
 export function useSocket() {
   const [connected, setConnected] = useState(false);
 
   useEffect(() => {
     if (!sharedSocket) {
       sharedSocket = io(process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:3001", {
-        withCredentials: true,
+        auth: async (cb) => {
+          const res = await fetch("/api/v1/socket-token");
+          const data = await res.json();
+          cb({ token: data.token });
+        },
       });
     }
     const socket = sharedSocket;

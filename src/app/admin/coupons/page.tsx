@@ -1,10 +1,12 @@
 import { listCouponsForAdmin } from "@/server/services/coupon-service";
 import { listCoursesForAdmin } from "@/server/services/course-service";
+import { requireAdmin } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { CreateCouponForm, CouponStatusToggle } from "@/components/admin/coupon-manager";
 
 export default async function AdminCouponsPage() {
+  await requireAdmin();
   const [coupons, courses] = await Promise.all([listCouponsForAdmin(), listCoursesForAdmin()]);
 
   return (

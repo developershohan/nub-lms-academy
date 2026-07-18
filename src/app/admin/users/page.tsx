@@ -1,4 +1,5 @@
 import { listUsersForAdmin } from "@/server/services/user-service";
+import { requireAdmin } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { UserBanActions } from "@/components/admin/user-ban-actions";
@@ -15,6 +16,7 @@ export default async function AdminUsersPage({
 }: {
   searchParams: Promise<{ q?: string }>;
 }) {
+  await requireAdmin();
   const { q } = await searchParams;
   const users = await listUsersForAdmin(q);
 

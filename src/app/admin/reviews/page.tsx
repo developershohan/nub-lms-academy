@@ -1,9 +1,11 @@
 import { listAllReviewsForAdmin } from "@/server/services/review-service";
+import { requireAdmin } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ReviewModerationActions } from "@/components/admin/review-moderation-actions";
 
 export default async function AdminReviewsPage() {
+  await requireAdmin();
   const reviews = await listAllReviewsForAdmin();
 
   return (

@@ -1,7 +1,11 @@
 import { listOrdersForAdmin } from "@/server/services/order-service";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { getPlatformSettings } from "@/server/services/settings-service";
+import { requireAdmin } from "@/lib/permissions";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { RefundOrderButton } from "@/components/admin/refund-order-button";
+import { ApproveOrderButton } from "@/components/admin/approve-order-button";
+import { setAutoApproveAction } from "./actions";
 
 const STATUS_VARIANT: Record<string, "secondary" | "outline" | "destructive"> = {
   PAID: "secondary",
@@ -12,11 +16,40 @@ const STATUS_VARIANT: Record<string, "secondary" | "outline" | "destructive"> = 
 };
 
 export default async function AdminOrdersPage() {
-  const orders = await listOrdersForAdmin();
+  await requireAdmin();
+  const [orders, settings] = await Promise.all([listOrdersForAdmin(), getPlatformSettings()]);
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Orders</h1>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Payment approval</CardTitle>
+          <CardDescription>
+            When on, successful payments enroll the student immediately. When off, every payment
+            stays pending until you approve it below.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form action={setAutoApproveAction} className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              id="autoApprove"
+              name="autoApprove"
+              defaultChecked={settings.autoApprovePayments}
+              className="size-4"
+            />
+            <label htmlFor="autoApprove" className="text-sm">
+              Auto-approve payments
+            </label>
+            <button type="submit" className="ml-2 text-sm underline underline-offset-4">
+              Save
+            </button>
+          </form>
+        </CardContent>
+      </Card>
+
       {orders.length === 0 && <p className="text-muted-foreground">No orders yet.</p>}
       <div className="space-y-3">
         {orders.map((order) => (
@@ -34,6 +67,7 @@ export default async function AdminOrdersPage() {
                   {order.createdAt.toLocaleDateString()} · ${Number(order.total).toFixed(2)}
                 </p>
               </div>
+              {order.status === "PENDING" && <ApproveOrderButton orderId={order.id} />}
               {order.status === "PAID" && <RefundOrderButton orderId={order.id} />}
             </CardContent>
           </Card>

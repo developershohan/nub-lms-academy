@@ -1,9 +1,11 @@
 import { listCertificatesForAdmin } from "@/server/services/certificate-service";
+import { requireAdmin } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { RevokeCertificateButton } from "@/components/admin/revoke-certificate-button";
 
 export default async function AdminCertificatesPage() {
+  await requireAdmin();
   const certificates = await listCertificatesForAdmin();
 
   return (

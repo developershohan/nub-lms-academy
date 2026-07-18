@@ -1,8 +1,10 @@
 import { listAuditLogsForAdmin } from "@/server/services/audit-service";
+import { requireAdmin } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 
 export default async function AdminAuditLogsPage() {
+  await requireAdmin();
   const logs = await listAuditLogsForAdmin();
 
   return (

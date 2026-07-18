@@ -6,6 +6,7 @@ import { getStripeClient } from "@/lib/stripe";
 import { canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { validateCoupon, calculateDiscount } from "@/server/services/coupon-service";
+import { getPlatformSettings } from "@/server/services/settings-service";
 
 function revalidateOrderPaths() {
   revalidatePath("/student/billing");
@@ -71,7 +72,7 @@ export async function createCheckoutSession(userId: string, courseId: string, co
           quantity: 1,
         },
       ],
-      success_url: `${baseUrl}/student/billing?success=1`,
+      success_url: `${baseUrl}/student/billing?success=1&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/courses/${course.slug}`,
       metadata: { orderId: order.id },
     });
@@ -123,6 +124,52 @@ async function markOrderPaid(orderId: string, event: { id?: string; paymentInten
   revalidatePath("/student/dashboard");
 }
 
+async function recordCapturedPaymentIntent(orderId: string, paymentIntentId: string | null) {
+  if (!paymentIntentId) return;
+  await prisma.order.update({ where: { id: orderId }, data: { stripePaymentIntentId: paymentIntentId } });
+}
+
+/** Called from the checkout success redirect as a fallback for environments where the Stripe
+ * webhook isn't wired up (e.g. local dev) - verifies payment directly against Stripe instead of
+ * waiting for the webhook, then finalizes the order the same way the webhook would. */
+export async function confirmCheckoutSession(userId: string, stripeSessionId: string) {
+  const order = await prisma.order.findUnique({ where: { stripeCheckoutSessionId: stripeSessionId } });
+  if (!order || order.userId !== userId) return { error: "Not found" } as const;
+  if (order.status !== "PENDING") return { ok: true, status: order.status } as const;
+
+  const stripe = getStripeClient();
+  if (!stripe) return { error: "Payments aren't configured yet" } as const;
+
+  const session = await stripe.checkout.sessions.retrieve(stripeSessionId);
+  if (session.payment_status !== "paid") return { ok: true, status: order.status } as const;
+
+  const paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : null;
+  const settings = await getPlatformSettings();
+  if (settings.autoApprovePayments) {
+    await markOrderPaid(order.id, { paymentIntentId });
+    return { ok: true, status: "PAID" } as const;
+  }
+
+  // Payment was captured by Stripe but enrollment is deferred until an admin approves it.
+  await recordCapturedPaymentIntent(order.id, paymentIntentId);
+  return { ok: true, status: "PENDING" } as const;
+}
+
+/** Admin override for orders left PENDING - either because auto-approve is off, or because the
+ * webhook/confirmation fallback never ran. Idempotent: re-approving an already-PAID order is a no-op. */
+export async function adminMarkOrderPaid(actorId: string, orderId: string) {
+  if (!(await canAdminAccess(actorId))) return { error: "Forbidden" } as const;
+
+  const order = await prisma.order.findUnique({ where: { id: orderId } });
+  if (!order) return { error: "Not found" } as const;
+  if (order.status === "PAID") return { ok: true } as const;
+  if (order.status !== "PENDING") return { error: "Only pending orders can be approved" } as const;
+
+  await markOrderPaid(orderId, { paymentIntentId: order.stripePaymentIntentId });
+  await logAudit(actorId, "order:approve", "Order", orderId);
+  return { ok: true } as const;
+}
+
 async function markOrderFailed(orderId: string, event: { id?: string }) {
   const order = await prisma.order.findUnique({ where: { id: orderId } });
   if (!order || order.status !== "PENDING") return;
@@ -143,11 +190,15 @@ export async function handleStripeWebhookEvent(event: Stripe.Event) {
   if (event.type === "checkout.session.completed") {
     const session = event.data.object as Stripe.Checkout.Session;
     const orderId = session.metadata?.orderId;
+    const paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : null;
     if (orderId) {
-      await markOrderPaid(orderId, {
-        id: event.id,
-        paymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : null,
-      });
+      const settings = await getPlatformSettings();
+      if (settings.autoApprovePayments) {
+        await markOrderPaid(orderId, { id: event.id, paymentIntentId });
+      } else {
+        // Payment captured, but enrollment is deferred until an admin approves it manually.
+        await recordCapturedPaymentIntent(orderId, paymentIntentId);
+      }
     }
   } else if (event.type === "checkout.session.expired") {
     const session = event.data.object as Stripe.Checkout.Session;
