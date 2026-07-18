@@ -5,6 +5,7 @@ const ROLE_PREFIXES = ["/student", "/teacher", "/admin"] as const;
 /** Where a user's own dashboard lives, ranked by privilege so multi-role users land somewhere sensible. */
 export function getRoleHome(roles: RoleName[]): string {
   if (roles.includes("SUPER_ADMIN") || roles.includes("ADMIN")) return "/admin/dashboard";
+  if (roles.includes("SUPPORT")) return "/admin/messages";
   if (roles.includes("TEACHER")) return "/teacher/dashboard";
   return "/student/dashboard";
 }

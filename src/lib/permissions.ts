@@ -60,6 +60,9 @@ const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     "chat:moderate",
     "admin:access",
   ],
+  // Handles Support conversations and message moderation only - never admin:access, so every
+  // other admin page (users, courses, coupons, orders, ...) stays closed to this role.
+  SUPPORT: ["chat:moderate"],
 };
 
 /** Re-checks status/roles against the DB instead of trusting stale JWT claims. */
@@ -108,6 +111,14 @@ export async function requireTeacher() {
   return user;
 }
 
+/** For the one admin page SUPPORT staff can also reach (message moderation) - broader than
+ * requireAdmin (which checks admin:access, a permission SUPPORT deliberately lacks). */
+export async function requireChatModerator() {
+  const user = await getCurrentUser();
+  if (!user || !hasPermission(user.roles, "chat:moderate")) redirect("/login");
+  return user;
+}
+
 export async function canAdminAccess(userId: string): Promise<boolean> {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -115,6 +126,16 @@ export async function canAdminAccess(userId: string): Promise<boolean> {
   });
   if (!user || user.status !== "ACTIVE") return false;
   return hasPermission(user.roles.map((r) => r.role.name), "admin:access");
+}
+
+/** ADMIN/SUPER_ADMIN and SUPPORT can all moderate chat - broader than canAdminAccess. */
+export async function canModerateChat(userId: string): Promise<boolean> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    include: { roles: { include: { role: true } } },
+  });
+  if (!user || user.status !== "ACTIVE") return false;
+  return hasPermission(user.roles.map((r) => r.role.name), "chat:moderate");
 }
 
 /**
@@ -132,6 +153,13 @@ export async function canManageCourse(userId: string, courseId: string): Promise
 
   const course = await prisma.course.findUnique({ where: { id: courseId }, select: { teacherId: true } });
   return course?.teacherId === userId;
+}
+
+/** Sub-instructors get chat/support access on their assigned course (see CourseInstructor) but
+ * never content-edit rights - canManageCourse stays owning-teacher-only for that reason. */
+export async function isSubInstructor(userId: string, courseId: string): Promise<boolean> {
+  const row = await prisma.courseInstructor.findUnique({ where: { courseId_userId: { courseId, userId } } });
+  return !!row;
 }
 
 /**

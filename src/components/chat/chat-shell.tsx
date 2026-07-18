@@ -14,6 +14,7 @@ import {
   startSupportConversationAction,
   hideMessageAction,
 } from "@/components/chat/actions";
+import { StaffContactPanel } from "@/components/chat/staff-contact-panel";
 
 type ChatMessage = {
   id: string;
@@ -25,9 +26,17 @@ type ChatMessage = {
   sender: { id: string; name: string | null };
 };
 
-export type ChatContact =
-  | { kind: "direct"; userId: string; label: string }
-  | { kind: "course_group"; courseId: string; label: string };
+export type ChatContact = {
+  kind: "direct" | "course_group";
+  id: string; // userId for "direct", courseId for "course_group"
+  label: string;
+  /** Section heading when rendered in the list (e.g. "Classmates", "Course A"). Ignored for
+   * dropdown contacts, which are grouped under a single "Staff" selector instead. */
+  group?: string;
+  /** Renders inside the compact staff selector instead of the browsable list - use for the
+   * small, fixed set of admin/sub-instructor/support contacts, not a potentially-long student list. */
+  dropdown?: boolean;
+};
 
 export function ChatShell({
   currentUser,
@@ -35,12 +44,15 @@ export function ChatShell({
   contacts = [],
   showContactSupport = false,
   isModerator = false,
+  allowStaffSearch = false,
 }: {
   currentUser: { id: string; name: string | null };
   initialConversations: ConversationSummary[];
   contacts?: ChatContact[];
   showContactSupport?: boolean;
   isModerator?: boolean;
+  /** Admin/support "chat with anyone" - a live user search instead of a fixed contact list. */
+  allowStaffSearch?: boolean;
 }) {
   const { socket, connected, error: socketError } = useSocket();
   const [conversations, setConversations] = useState(initialConversations);
@@ -205,42 +217,54 @@ export function ChatShell({
     setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, deletedAt: new Date().toISOString() } : m)));
   }
 
+  function handleContactClick(contact: ChatContact) {
+    if (contact.kind === "direct") return handleStartDirect(contact.id);
+    return handleStartCourseGroup(contact.id, contact.label);
+  }
+
   const selected = conversations.find((c) => c.id === selectedId);
+
+  const listContacts = contacts.filter((c) => !c.dropdown);
+  const dropdownContacts = contacts.filter((c) => c.dropdown);
+  const listGroups = new Map<string, ChatContact[]>();
+  for (const contact of listContacts) {
+    const key = contact.group ?? "";
+    listGroups.set(key, [...(listGroups.get(key) ?? []), contact]);
+  }
 
   return (
     <div className="grid gap-4 md:grid-cols-[280px_1fr]">
       <div className="space-y-3">
-        {(contacts.length > 0 || showContactSupport) && (
-          <div className="space-y-1.5 rounded-lg border p-3">
-            <p className="text-xs font-medium text-muted-foreground">Start a conversation</p>
-            {contacts.map((contact) =>
-              contact.kind === "direct" ? (
-                <Button
-                  key={`direct-${contact.userId}`}
-                  variant="outline"
-                  size="sm"
-                  className="w-full justify-start"
-                  onClick={() => handleStartDirect(contact.userId)}
-                >
-                  {contact.label}
-                </Button>
-              ) : (
-                <Button
-                  key={`course-${contact.courseId}`}
-                  variant="outline"
-                  size="sm"
-                  className="w-full justify-start"
-                  onClick={() => handleStartCourseGroup(contact.courseId, contact.label)}
-                >
-                  {contact.label} (group)
-                </Button>
-              )
-            )}
-            {showContactSupport && (
-              <Button variant="outline" size="sm" className="w-full justify-start" onClick={handleContactSupport}>
-                Contact support
-              </Button>
-            )}
+        {(dropdownContacts.length > 0 || showContactSupport || allowStaffSearch) && (
+          <StaffContactPanel
+            dropdownContacts={dropdownContacts}
+            showContactSupport={showContactSupport}
+            allowStaffSearch={allowStaffSearch}
+            onSelectContact={handleContactClick}
+            onContactSupport={handleContactSupport}
+            onSelectUser={handleStartDirect}
+          />
+        )}
+
+        {listContacts.length > 0 && (
+          <div className="space-y-3 rounded-lg border p-3">
+            {[...listGroups.entries()].map(([group, groupContacts]) => (
+              <div key={group || "_"} className="space-y-1.5">
+                {group && <p className="text-xs font-medium text-muted-foreground">{group}</p>}
+                {groupContacts.map((contact) => (
+                  <Button
+                    key={`${contact.kind}-${contact.id}`}
+                    variant="outline"
+                    size="sm"
+                    className="w-full justify-start"
+                    onClick={() => handleContactClick(contact)}
+                  >
+                    {contact.label}
+                    {contact.kind === "course_group" && " (group)"}
+                  </Button>
+                ))}
+              </div>
+            ))}
           </div>
         )}
 
