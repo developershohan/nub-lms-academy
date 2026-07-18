@@ -42,7 +42,7 @@ export function ChatShell({
   showContactSupport?: boolean;
   isModerator?: boolean;
 }) {
-  const { socket, connected } = useSocket();
+  const { socket, connected, error: socketError } = useSocket();
   const [conversations, setConversations] = useState(initialConversations);
   const [selectedId, setSelectedId] = useState<string | null>(initialConversations[0]?.id ?? null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -79,9 +79,12 @@ export function ChatShell({
 
     socket.emit("conversation:join", selectedId);
     socket.emit("message:read", selectedId);
-    setSeenByOther(false);
-    setTypingLabel(null);
-    setLoadingMessages(true);
+    // Deferred one tick: setState must not be called synchronously from inside an effect body.
+    queueMicrotask(() => {
+      setSeenByOther(false);
+      setTypingLabel(null);
+      setLoadingMessages(true);
+    });
 
     fetch(`/api/v1/chat/conversations/${selectedId}/messages`)
       .then((res) => res.json())
@@ -271,7 +274,12 @@ export function ChatShell({
           <>
             <div className="border-b p-3 text-sm font-medium">
               {selected.label}
-              {!connected && <span className="ml-2 text-xs text-muted-foreground">(connecting...)</span>}
+              {!connected && socketError && (
+                <span className="ml-2 text-xs text-destructive">({socketError})</span>
+              )}
+              {!connected && !socketError && (
+                <span className="ml-2 text-xs text-muted-foreground">(connecting...)</span>
+              )}
             </div>
             <div className="flex-1 space-y-2 overflow-y-auto p-3">
               {loadingMessages && <p className="text-sm text-muted-foreground">Loading...</p>}
