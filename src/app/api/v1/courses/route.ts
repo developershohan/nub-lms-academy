@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentUser, hasRole } from "@/lib/permissions";
+import { parseJsonBody } from "@/lib/http/json";
 import { listPublishedCourses, createCourse } from "@/server/services/course-service";
 
 export async function GET(request: Request) {
@@ -22,11 +23,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const body = await request.json();
-  const parsed = createSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
-  }
+  const parsed = await parseJsonBody(request, createSchema);
+  if ("response" in parsed) return parsed.response;
 
   const course = await createCourse(user.id, parsed.data.title);
   return NextResponse.json({ course }, { status: 201 });

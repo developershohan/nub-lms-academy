@@ -7,6 +7,11 @@ import {
   startSupportConversation,
   getOrCreateCourseGroupConversation,
 } from "@/server/services/chat-service";
+import { parseJsonBody } from "@/lib/http/json";
+
+// Explicit defense-in-depth for a user-specific endpoint - never let a future caching-default
+// change silently make one user's conversations visible to another.
+export const dynamic = "force-dynamic";
 
 const startSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("DIRECT"), otherUserId: z.string().min(1) }),
@@ -26,9 +31,8 @@ export async function POST(request: Request) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
-  const body = await request.json();
-  const parsed = startSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
+  const parsed = await parseJsonBody(request, startSchema);
+  if ("response" in parsed) return parsed.response;
 
   const userId = session.user.id;
   const result =

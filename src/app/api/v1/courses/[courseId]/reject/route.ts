@@ -1,18 +1,16 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { rejectCourseSchema } from "@/lib/validations/course";
+import { parseJsonBody } from "@/lib/http/json";
 import { rejectCourse } from "@/server/services/course-service";
 
 export async function POST(request: Request, { params }: { params: Promise<{ courseId: string }> }) {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!session?.user?.id) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
   const { courseId } = await params;
-  const body = await request.json();
-  const parsed = rejectCourseSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
-  }
+  const parsed = await parseJsonBody(request, rejectCourseSchema);
+  if ("response" in parsed) return parsed.response;
 
   const result = await rejectCourse(session.user.id, courseId, parsed.data.reason);
   if ("error" in result) {

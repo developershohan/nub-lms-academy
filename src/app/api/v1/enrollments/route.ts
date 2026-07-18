@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { auth } from "@/lib/auth";
 import { enrollInFreeCourse, listStudentEnrollments } from "@/server/services/enrollment-service";
+import { parseJsonBody } from "@/lib/http/json";
+
+export const dynamic = "force-dynamic";
 
 export async function GET() {
   const session = await auth();
@@ -17,9 +20,8 @@ export async function POST(request: Request) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
-  const body = await request.json();
-  const parsed = enrollSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
+  const parsed = await parseJsonBody(request, enrollSchema);
+  if ("response" in parsed) return parsed.response;
 
   const result = await enrollInFreeCourse(session.user.id, parsed.data.courseId);
   if ("error" in result) return NextResponse.json({ error: result.error }, { status: 400 });

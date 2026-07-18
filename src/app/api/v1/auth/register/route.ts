@@ -1,13 +1,11 @@
 import { NextResponse } from "next/server";
 import { registerSchema } from "@/lib/validations/auth";
+import { parseJsonBody } from "@/lib/http/json";
 import { registerUser } from "@/server/services/auth-service";
 
 export async function POST(request: Request) {
-  const body = await request.json();
-  const parsed = registerSchema.safeParse(body);
-  if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
-  }
+  const parsed = await parseJsonBody(request, registerSchema);
+  if ("response" in parsed) return parsed.response;
 
   const result = await registerUser(parsed.data);
   if ("error" in result) {
