@@ -57,11 +57,15 @@ const io = new Server(httpServer, {
 const connectionsByUser = new Map<string, number>();
 
 io.use((socket, next) => {
-  authenticateSocket(socket, next).catch(() => next(new Error("Unauthorized")));
+  authenticateSocket(socket, next).catch((err) => {
+    console.error(`Socket auth failed (${socket.id}):`, err);
+    next(new Error("Unauthorized"));
+  });
 });
 
 io.on("connection", (socket) => {
   const { id: userId, roleNames } = socket.data.user;
+  console.log(`Socket connected: user ${userId}, socket ${socket.id}, transport ${socket.conn.transport.name}`);
 
   socket.join(`user:${userId}`);
   if (roleNames.includes("ADMIN") || roleNames.includes("SUPER_ADMIN")) socket.join("admins");
@@ -72,7 +76,8 @@ io.on("connection", (socket) => {
 
   registerChatEvents(io, socket);
 
-  socket.on("disconnect", () => {
+  socket.on("disconnect", (reason) => {
+    console.log(`Socket disconnected: user ${userId}, socket ${socket.id}, reason: ${reason}`);
     clearRateLimit(socket.id);
     const count = (connectionsByUser.get(userId) ?? 1) - 1;
     if (count <= 0) {
