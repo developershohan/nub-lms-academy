@@ -22,7 +22,7 @@ export default async function EditCoursePage({
   const [course, categories] = await Promise.all([getCourseForEdit(courseId, user.id), listCategories()]);
   if (!course) notFound();
 
-  const quizzes = await listQuizzesForEdit(courseId);
+  const quizzes = (await listQuizzesForEdit(user.id, courseId)) ?? [];
 
   const canSubmit = course.status === "DRAFT" || course.status === "REJECTED";
 

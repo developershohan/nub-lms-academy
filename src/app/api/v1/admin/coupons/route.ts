@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { canAdminAccess } from "@/lib/permissions";
 import { couponSchema } from "@/lib/validations/coupon";
+import { parseJsonBody } from "@/lib/http/json";
 import { listCouponsForAdmin, createCoupon } from "@/server/services/coupon-service";
 
 export async function GET() {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+  if (!(await canAdminAccess(session.user.id))) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const coupons = await listCouponsForAdmin();
   return NextResponse.json({ coupons });
@@ -15,9 +20,8 @@ export async function POST(request: Request) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
-  const body = await request.json();
-  const parsed = couponSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
+  const parsed = await parseJsonBody(request, couponSchema);
+  if ("response" in parsed) return parsed.response;
 
   const result = await createCoupon(session.user.id, parsed.data);
   if ("error" in result) {

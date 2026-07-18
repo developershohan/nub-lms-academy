@@ -14,10 +14,7 @@ export async function resetPasswordAction(
     return { error: parsed.error.issues[0].message };
   }
 
-  const email = formData.get("email") as string;
-  if (!email) return { error: "Missing email" };
-
-  const result = await resetPassword(email, parsed.data);
+  const result = await resetPassword(parsed.data.email, parsed.data);
   if ("error" in result) return { error: result.error };
   return { success: true };
 }

@@ -13,7 +13,11 @@ async function getCourseIdForQuiz(quizId: string) {
   return quiz?.courseId;
 }
 
-export function listQuizzesForEdit(courseId: string) {
+/** Includes each option's isCorrect flag (the answer key) - unlike the student-facing
+ * getQuizForTaking, so ownership must be verified here rather than left to the caller. */
+export async function listQuizzesForEdit(userId: string, courseId: string) {
+  if (!(await canManageCourse(userId, courseId))) return null;
+
   return prisma.quiz.findMany({
     where: { courseId },
     orderBy: { sortOrder: "asc" },

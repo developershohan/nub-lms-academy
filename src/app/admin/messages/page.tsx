@@ -1,12 +1,10 @@
-import { redirect } from "next/navigation";
-import { getCurrentUser } from "@/lib/permissions";
+import { requireAdmin } from "@/lib/permissions";
 import { listSupportConversationSummariesForAdmin, listRecentMessagesForAdmin } from "@/server/services/chat-service";
 import { ChatShell } from "@/components/chat/chat-shell";
 import { MessageModerationFeed } from "@/components/admin/message-moderation-feed";
 
 export default async function AdminMessagesPage() {
-  const user = await getCurrentUser();
-  if (!user) redirect("/login");
+  const user = await requireAdmin();
 
   const [conversations, recentMessages] = await Promise.all([
     listSupportConversationSummariesForAdmin(),

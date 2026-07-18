@@ -22,6 +22,11 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
+  // Order and subscription events never overlap (each handler no-ops on event types it doesn't
+  // own), so both are always dispatched - this was previously imported but never called, meaning
+  // subscription lifecycle events (renewal, cancellation, payment failure) were acknowledged to
+  // Stripe but silently never applied to our subscription records.
   await handleStripeWebhookEvent(event);
+  await handleSubscriptionWebhookEvent(event);
   return NextResponse.json({ received: true });
 }
