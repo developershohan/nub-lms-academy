@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400" role="img" aria-label="">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f59e0b"/><stop offset="1" stop-color="#b45309"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+    </pattern>
+  </defs>
+  <rect width="400" height="400" fill="url(#bg)"/>
+  <rect width="400" height="400" fill="url(#grid)"/>
+  <circle cx="200" cy="150" r="72" fill="#ffffff" fill-opacity="0.85"/>
+  <path d="M60 400 C60 300 130 260 200 260 C270 260 340 300 340 400 Z" fill="#ffffff" fill-opacity="0.85"/>
+  <text x="24" y="44" font-family="ui-monospace, Menlo, monospace" font-size="18" letter-spacing="4"
+        fill="#ffffff" fill-opacity="0.9">JF</text>
+</svg>

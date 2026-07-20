@@ -24,7 +24,7 @@ export function ForgotPasswordForm() {
   if (state.sent) {
     return (
       <p className="text-sm text-muted-foreground">
-        Check the server logs for your reset link (email delivery is not configured yet in development).
+  Please check your inbox. If you don't see the email, check your spam or junk folder.
       </p>
     );
   }

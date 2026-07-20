@@ -10,7 +10,7 @@ const initialState: ApplyTeacherState = {};
 function SubmitButton() {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" disabled={pending}>
+    <Button type="submit" size="lg" className="w-full" disabled={pending}>
       {pending ? "Submitting..." : "Apply to become a teacher"}
     </Button>
   );

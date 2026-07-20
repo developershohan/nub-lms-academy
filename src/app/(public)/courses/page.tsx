@@ -1,8 +1,8 @@
+import Link from "next/link";
 import { listPublishedCourses } from "@/server/services/course-service";
 import { listCategories } from "@/server/services/category-service";
 import { CourseCard } from "@/components/course/course-card";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
+import { CourseFilters } from "@/components/course/course-filters";
 
 export default async function CoursesPage({
   searchParams,
@@ -16,29 +16,22 @@ export default async function CoursesPage({
   ]);
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6 px-4 py-16">
-      <h1 className="text-2xl font-semibold">Courses</h1>
+    <div className="mx-auto max-w-6xl space-y-6 px-4 py-16 sm:py-24">
+      <div>
+        <p className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">Catalogue</p>
+        <h1 className="mt-2 text-4xl font-semibold tracking-tight">All courses</h1>
+      </div>
 
-      <form className="flex flex-wrap gap-2">
-        <Input name="q" defaultValue={q} placeholder="Search courses..." className="max-w-xs" />
-        <select
-          name="category"
-          defaultValue={category ?? ""}
-          className="h-9 rounded-md border bg-background px-3 text-sm"
-        >
-          <option value="">All categories</option>
-          {categories.map((c) => (
-            <option key={c.id} value={c.slug}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-        <Button type="submit" variant="outline">
-          Filter
-        </Button>
-      </form>
+      <CourseFilters categories={categories.map((c) => ({ id: c.id, slug: c.slug, name: c.name }))} />
 
-      {courses.length === 0 && <p className="text-muted-foreground">No courses found.</p>}
+      {courses.length === 0 && (
+        <div className="rounded-xl border border-dashed p-10 text-center">
+          <p className="text-muted-foreground">No courses match this search.</p>
+          <Link href="/courses" className="mt-2 inline-block text-sm font-medium text-primary hover:underline">
+            Clear filters
+          </Link>
+        </div>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {courses.map((course) => (

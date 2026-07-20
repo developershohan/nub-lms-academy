@@ -14,13 +14,19 @@ export async function SiteHeader() {
   return (
     <header className="border-b">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-        <Link href="/" className="font-semibold">
+        <Link href="/" className="font-heading text-[15px] font-semibold tracking-tight">
           NUB Academy
         </Link>
         <nav className="hidden gap-6 text-sm text-muted-foreground sm:flex">
-          <Link href="/courses">Courses</Link>
-          <Link href="/pricing">Pricing</Link>
-          {!user?.roles.includes("TEACHER") && <Link href="/teacher/apply">Become a teacher</Link>}
+          <Link href="/courses" className="transition-colors hover:text-foreground">Courses</Link>
+          <Link href="/categories" className="transition-colors hover:text-foreground">Categories</Link>
+          <Link href="/pricing" className="transition-colors hover:text-foreground">Pricing</Link>
+          <Link href="/about" className="transition-colors hover:text-foreground">About</Link>
+          {!user?.roles.includes("TEACHER") && (
+            <Link href="/teacher/apply" className="transition-colors hover:text-foreground">
+              Become a teacher
+            </Link>
+          )}
         </nav>
         <div className="flex items-center gap-2">
           <ThemeToggle />

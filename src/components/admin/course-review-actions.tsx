@@ -9,6 +9,8 @@ import {
   unpublishCourseAction,
   includeInSubscriptionAction,
   excludeFromSubscriptionAction,
+  featureCourseAction,
+  unfeatureCourseAction,
   type ActionState,
 } from "@/app/admin/courses/actions";
 import { Button } from "@/components/ui/button";
@@ -29,10 +31,12 @@ export function CourseReviewActions({
   courseId,
   status,
   isSubscriptionIncluded,
+  isFeatured = false,
 }: {
   courseId: string;
   status: string;
   isSubscriptionIncluded: boolean;
+  isFeatured?: boolean;
 }) {
   const [approveState, approveAction] = useActionState(approveCourseAction, initialState);
   const [rejectState, rejectAction] = useActionState(rejectCourseAction, initialState);
@@ -42,10 +46,19 @@ export function CourseReviewActions({
     isSubscriptionIncluded ? excludeFromSubscriptionAction : includeInSubscriptionAction,
     initialState
   );
+  const [featuredState, featuredAction] = useActionState(
+    isFeatured ? unfeatureCourseAction : featureCourseAction,
+    initialState
+  );
   const [showReject, setShowReject] = useState(false);
 
   const error =
-    approveState.error ?? rejectState.error ?? publishState.error ?? unpublishState.error ?? subscriptionState.error;
+    approveState.error ??
+    rejectState.error ??
+    publishState.error ??
+    unpublishState.error ??
+    subscriptionState.error ??
+    featuredState.error;
 
   return (
     <div className="flex flex-col items-end gap-2">
@@ -68,10 +81,20 @@ export function CourseReviewActions({
           </form>
         )}
         {status === "PUBLISHED" && (
-          <form action={unpublishAction}>
-            <input type="hidden" name="courseId" value={courseId} />
-            <ActionButton label="Unpublish" pendingLabel="Unpublishing..." variant="outline" />
-          </form>
+          <>
+            <form action={unpublishAction}>
+              <input type="hidden" name="courseId" value={courseId} />
+              <ActionButton label="Unpublish" pendingLabel="Unpublishing..." variant="outline" />
+            </form>
+            <form action={featuredAction}>
+              <input type="hidden" name="courseId" value={courseId} />
+              <ActionButton
+                label={isFeatured ? "Remove from home" : "Feature on home"}
+                pendingLabel="Saving..."
+                variant="outline"
+              />
+            </form>
+          </>
         )}
         <form action={subscriptionAction}>
           <input type="hidden" name="courseId" value={courseId} />

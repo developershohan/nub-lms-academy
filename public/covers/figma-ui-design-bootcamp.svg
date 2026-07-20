@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="450" viewBox="0 0 800 450" role="img" aria-label="">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#c026d3"/><stop offset="1" stop-color="#86198f"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+    </pattern>
+  </defs>
+  <rect width="800" height="450" fill="url(#g)"/>
+  <rect width="800" height="450" fill="url(#grid)"/>
+  <circle cx="562" cy="172" r="212" fill="#ffffff" fill-opacity="0.09"/>
+  <circle cx="502" cy="352" r="117" fill="#000000" fill-opacity="0.10"/>
+  <text x="36" y="470" font-family="ui-monospace, Menlo, monospace" font-size="300" font-weight="700"
+        fill="#ffffff" fill-opacity="0.14" letter-spacing="-12" transform="rotate(5 36 470)">UX</text>
+  <text x="36" y="60" font-family="ui-monospace, Menlo, monospace" font-size="20" letter-spacing="6"
+        fill="#ffffff" fill-opacity="0.85">UX-92</text>
+</svg>

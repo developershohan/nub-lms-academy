@@ -8,6 +8,14 @@ export function listCategories() {
   return prisma.category.findMany({ orderBy: { name: "asc" } });
 }
 
+/** Categories with their published-course counts, for the public catalogue pages. */
+export function listCategoriesWithCounts() {
+  return prisma.category.findMany({
+    orderBy: { name: "asc" },
+    include: { _count: { select: { courses: { where: { status: "PUBLISHED" } } } } },
+  });
+}
+
 function revalidateCategoryPaths() {
   revalidatePath("/admin/categories");
   revalidatePath("/courses");

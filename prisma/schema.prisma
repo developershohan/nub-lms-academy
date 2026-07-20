@@ -215,6 +215,7 @@ model Course {
   price                  Decimal      @default(0) @db.Decimal(10, 2)
   salePrice              Decimal?     @db.Decimal(10, 2)
   isSubscriptionIncluded Boolean      @default(false)
+  isFeatured             Boolean      @default(false)
   status                 CourseStatus @default(DRAFT)
   rejectionReason        String?
   publishedAt            DateTime?
@@ -240,6 +241,7 @@ model Course {
   instructors   CourseInstructor[]
 
   @@index([status])
+  @@index([status, isFeatured])
   @@index([teacherId])
   @@index([categoryId])
 }

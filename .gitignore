@@ -30,9 +30,51 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files (can opt-in for committing if needed)
+# environment files (may contain secrets or machine-specific values)
 .env*
-!.env.example
+
+# local documentation and AI-assistant configuration
+*.md
+/docs/
+/.agents/
+/.claude/
+
+# editor and IDE settings
+/.idea/
+/.vscode/
+*.code-workspace
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# local caches and temporary files
+.cache/
+.eslintcache
+.stylelintcache
+.turbo/
+.parcel-cache/
+tmp/
+temp/
+*.tmp
+*.temp
+
+# test and browser-runner artifacts
+/test-results/
+/playwright-report/
+/blob-report/
+/.vitest/
+
+# local databases
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# operating-system metadata
+Thumbs.db
+Desktop.ini
 
 # vercel
 .vercel

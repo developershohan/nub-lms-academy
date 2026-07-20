@@ -18,6 +18,7 @@ export default async function AdminCoursesPage() {
             <CardHeader className="flex-row items-center justify-between space-y-0">
               <CardTitle className="text-base">{course.title}</CardTitle>
               <div className="flex gap-2">
+                {course.isFeatured && <Badge className="bg-amber text-amber-foreground">Featured</Badge>}
                 {course.isSubscriptionIncluded && <Badge variant="outline">Subscription</Badge>}
                 <Badge variant="secondary">{course.status.replace("_", " ")}</Badge>
               </div>
@@ -30,6 +31,7 @@ export default async function AdminCoursesPage() {
                 courseId={course.id}
                 status={course.status}
                 isSubscriptionIncluded={course.isSubscriptionIncluded}
+                isFeatured={course.isFeatured}
               />
             </CardContent>
           </Card>

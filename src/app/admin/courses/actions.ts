@@ -8,6 +8,7 @@ import {
   publishCourse,
   unpublishCourse,
   setCourseSubscriptionIncluded,
+  setCourseFeatured,
 } from "@/server/services/course-service";
 
 export type ActionState = { error?: string };
@@ -53,6 +54,24 @@ export async function unpublishCourseAction(_prevState: ActionState, formData: F
 
   const courseId = formData.get("courseId") as string;
   const result = await unpublishCourse(userId, courseId);
+  return "error" in result ? { error: result.error } : {};
+}
+
+export async function featureCourseAction(_prevState: ActionState, formData: FormData): Promise<ActionState> {
+  const userId = await requireUserId();
+  if (!userId) return { error: "Not authenticated" };
+
+  const courseId = formData.get("courseId") as string;
+  const result = await setCourseFeatured(userId, courseId, true);
+  return "error" in result ? { error: result.error } : {};
+}
+
+export async function unfeatureCourseAction(_prevState: ActionState, formData: FormData): Promise<ActionState> {
+  const userId = await requireUserId();
+  if (!userId) return { error: "Not authenticated" };
+
+  const courseId = formData.get("courseId") as string;
+  const result = await setCourseFeatured(userId, courseId, false);
   return "error" in result ? { error: result.error } : {};
 }
 
