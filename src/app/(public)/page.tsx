@@ -8,6 +8,8 @@ import { listCategoriesWithCounts } from "@/server/services/category-service";
 import { CourseCard } from "@/components/course/course-card";
 import { categoryStyle } from "@/lib/category-style";
 import { cn } from "@/lib/utils";
+import { getCurrentUser } from "@/lib/permissions";
+import { getRoleHome } from "@/lib/role-home";
 
 function Eyebrow({ children }: { children: React.ReactNode }) {
   return (
@@ -98,7 +100,8 @@ const steps = [
 ];
 
 export default async function HomePage() {
-  const [featured, categories, courseCount, teacherCount] = await Promise.all([
+  const [user, featured, categories, courseCount, teacherCount] = await Promise.all([
+    getCurrentUser(),
     listFeaturedCourses(7),
     listCategoriesWithCounts(),
     prisma.course.count({ where: { status: "PUBLISHED" } }),
@@ -107,6 +110,7 @@ export default async function HomePage() {
       .then((rows) => rows.length),
   ]);
   const [spotlight, ...rail] = featured;
+  const primaryAccountHref = user ? getRoleHome(user.roles) : "/register";
   const stats = [
     { value: courseCount, label: "courses" },
     { value: categories.filter((c) => c._count.courses > 0).length, label: "categories" },
@@ -131,8 +135,8 @@ export default async function HomePage() {
               <Button render={<Link href="/courses" />} size="lg">
                 Browse courses
               </Button>
-              <Button render={<Link href="/register" />} variant="outline" size="lg">
-                Start free
+              <Button render={<Link href={primaryAccountHref} />} variant="outline" size="lg">
+                {user ? "Go to dashboard" : "Start free"}
               </Button>
             </div>
             <dl className="mt-10 flex gap-8">

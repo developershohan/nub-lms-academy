@@ -7,10 +7,13 @@ import { prisma } from "@/lib/prisma";
 import { loginSchema } from "@/lib/validations/auth";
 import { resolveLoginDestination } from "@/lib/role-home";
 import { resendVerificationEmail } from "@/server/services/auth-service";
+import { redirectAuthenticatedUser } from "@/lib/permissions";
 
 export type LoginState = { error?: string; unverifiedEmail?: string };
 
 export async function loginAction(_prevState: LoginState, formData: FormData): Promise<LoginState> {
+  await redirectAuthenticatedUser();
+
   const parsed = loginSchema.safeParse(Object.fromEntries(formData));
   if (!parsed.success) {
     return { error: parsed.error.issues[0].message };
@@ -40,10 +43,12 @@ export async function loginAction(_prevState: LoginState, formData: FormData): P
 }
 
 export async function signInWithGoogleAction() {
+  await redirectAuthenticatedUser();
   await signIn("google");
 }
 
 export async function signInWithGitHubAction() {
+  await redirectAuthenticatedUser();
   await signIn("github");
 }
 

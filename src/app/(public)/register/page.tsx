@@ -1,8 +1,11 @@
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { RegisterForm } from "./register-form";
+import { redirectAuthenticatedUser } from "@/lib/permissions";
 
-export default function RegisterPage() {
+export default async function RegisterPage() {
+  await redirectAuthenticatedUser();
+
   return (
     <div className="flex min-h-[80vh] items-center justify-center px-4">
       <Card className="w-full max-w-sm">

@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { getCurrentUser } from "@/lib/permissions";
+import { getRoleHome } from "@/lib/role-home";
 
 const exploreLinks = [
   { href: "/courses", label: "All courses" },
@@ -7,13 +9,22 @@ const exploreLinks = [
   { href: "/about", label: "About us" },
 ];
 
-const accountLinks = [
-  { href: "/login", label: "Log in" },
-  { href: "/register", label: "Create account" },
-  { href: "/teacher/apply", label: "Become a teacher" },
-];
+export async function SiteFooter() {
+  const user = await getCurrentUser();
+  const accountLinks = user
+    ? [
+        { href: getRoleHome(user.roles), label: "Dashboard" },
+        { href: "/profile", label: "Profile" },
+        ...(!user.roles.includes("TEACHER")
+          ? [{ href: "/teacher/apply", label: "Become a teacher" }]
+          : []),
+      ]
+    : [
+        { href: "/login", label: "Log in" },
+        { href: "/register", label: "Create account" },
+        { href: "/teacher/apply", label: "Become a teacher" },
+      ];
 
-export function SiteFooter() {
   return (
     <footer className="border-t bg-sidebar">
       <div className="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:grid-cols-2 lg:grid-cols-4">

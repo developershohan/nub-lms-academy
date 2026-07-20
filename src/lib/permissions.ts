@@ -2,6 +2,7 @@ import "server-only";
 import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getRoleHome } from "@/lib/role-home";
 import type { RoleName } from "@/generated/prisma/client";
 
 export type Permission =
@@ -83,6 +84,14 @@ export async function getCurrentUser() {
     image: user.image,
     roles: user.roles.map((r) => r.role.name),
   };
+}
+
+/** Guest-only routes call this before rendering or mutating data. The database-backed user check
+ * prevents an active session from reopening login/registration flows and avoids trusting stale
+ * role or account-status claims from the JWT. */
+export async function redirectAuthenticatedUser() {
+  const user = await getCurrentUser();
+  if (user) redirect(getRoleHome(user.roles));
 }
 
 export function hasRole(roles: RoleName[], role: RoleName) {

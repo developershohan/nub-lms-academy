@@ -3,12 +3,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { LoginForm } from "./login-form";
 import { signInWithGoogleAction, signInWithGitHubAction } from "./actions";
+import { redirectAuthenticatedUser } from "@/lib/permissions";
 
 export default async function LoginPage({
   searchParams,
 }: {
   searchParams: Promise<{ callbackUrl?: string }>;
 }) {
+  await redirectAuthenticatedUser();
   const { callbackUrl } = await searchParams;
 
   return (
