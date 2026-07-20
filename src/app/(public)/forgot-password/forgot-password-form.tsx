@@ -24,7 +24,7 @@ export function ForgotPasswordForm() {
   if (state.sent) {
     return (
       <p className="text-sm text-muted-foreground">
-  Please check your inbox. If you don't see the email, check your spam or junk folder.
+        Please check your inbox. If you don&apos;t see the email, check your spam or junk folder.
       </p>
     );
   }
