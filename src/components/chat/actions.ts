@@ -7,7 +7,10 @@ import {
   getOrCreateCourseGroupConversation,
   markConversationRead,
   hideMessage,
+  searchUsersToMessage,
+  type ChatUserSearchResult,
 } from "@/server/services/chat-service";
+import { canModerateChat } from "@/lib/permissions";
 
 async function requireUserId() {
   const session = await auth();
@@ -42,4 +45,16 @@ export async function hideMessageAction(messageId: string) {
   const userId = await requireUserId();
   if (!userId) return { error: "Not authenticated" } as const;
   return hideMessage(userId, messageId);
+}
+
+/** Staff-only "chat with anyone" search - gated here rather than trusting the caller, since the
+ * result set (name/email of any active user) is only appropriate for chat moderators. */
+export async function searchUsersToMessageAction(
+  query: string
+): Promise<{ error: string } | { ok: true; results: ChatUserSearchResult[] }> {
+  const userId = await requireUserId();
+  if (!userId || !(await canModerateChat(userId))) return { error: "Forbidden" };
+
+  const results = await searchUsersToMessage(query, userId);
+  return { ok: true, results };
 }

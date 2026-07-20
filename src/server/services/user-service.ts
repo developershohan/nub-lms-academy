@@ -59,6 +59,50 @@ export async function unbanUser(actorId: string, userId: string) {
   return { ok: true } as const;
 }
 
+const ASSIGNABLE_ROLES = ["STUDENT", "TEACHER", "SUPPORT"] as const;
+export type AssignableRole = (typeof ASSIGNABLE_ROLES)[number];
+
+/**
+ * Admin-created accounts, not self-registration - sets the initial password directly rather than
+ * an invite email (see docs - manual account creation was scoped to not require wiring up an
+ * invite flow). Whether the email is pre-verified is the admin's explicit choice
+ * (autoVerify) rather than an implicit default - skip it to vouch for the address directly, or
+ * leave it off to make the new account go through the normal verification-email flow itself.
+ *
+ * Deliberately cannot create ADMIN/SUPER_ADMIN through this quick form - granting admin rights
+ * stays a separate, more deliberate action, same reasoning as banUser refusing to act on admins.
+ */
+export async function createUserByAdmin(
+  actorId: string,
+  data: { name: string; email: string; password: string; role: AssignableRole; autoVerify: boolean }
+) {
+  if (!(await canAdminAccess(actorId))) return { error: "Forbidden" } as const;
+  if (!ASSIGNABLE_ROLES.includes(data.role)) return { error: "Invalid role" } as const;
+
+  const email = data.email.trim().toLowerCase();
+  const existing = await prisma.user.findUnique({ where: { email } });
+  if (existing) return { error: "An account with this email already exists" } as const;
+
+  const passwordHash = await bcrypt.hash(data.password, 12);
+  const user = await prisma.$transaction(async (tx) => {
+    const created = await tx.user.create({
+      data: { name: data.name, email, passwordHash, emailVerified: data.autoVerify ? new Date() : null },
+    });
+    const role = await tx.role.upsert({
+      where: { name: data.role },
+      create: { name: data.role },
+      update: {},
+    });
+    await tx.userRole.create({ data: { userId: created.id, roleId: role.id } });
+    return created;
+  });
+
+  await logAudit(actorId, "user:create", "User", user.id, { role: data.role, autoVerify: data.autoVerify });
+  if (!data.autoVerify) await sendEmailVerification(email);
+  revalidateUserPaths();
+  return { ok: true, userId: user.id } as const;
+}
+
 export function getUserProfile(userId: string) {
   return prisma.user.findUnique({
     where: { id: userId },

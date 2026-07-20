@@ -24,6 +24,9 @@ enum RoleName {
   TEACHER
   ADMIN
   SUPER_ADMIN
+  // Manually assigned, like ADMIN/SUPER_ADMIN - handles Support conversations and chat
+  // moderation only, not the rest of the admin panel (see src/lib/permissions.ts).
+  SUPPORT
 }
 
 enum TeacherApplicationStatus {
@@ -65,6 +68,8 @@ model User {
   messages                 Message[]
   messageReadReceipts      MessageReadReceipt[]
   notifications            Notification[]
+  subInstructorOf          CourseInstructor[] @relation("SubInstructorUser")
+  addedSubInstructors      CourseInstructor[] @relation("SubInstructorAddedBy")
 
   @@index([status])
 }
@@ -232,10 +237,29 @@ model Course {
   orderItems    OrderItem[]
   coupons       Coupon[]
   conversations Conversation[]
+  instructors   CourseInstructor[]
 
   @@index([status])
   @@index([teacherId])
   @@index([categoryId])
+}
+
+/** A sub-instructor assigned by the owning teacher (canManageCourse) - chat/support access on
+ * this course only (can be listed as a contact, can message students), not content edit rights.
+ * The owning teacher themselves is Course.teacher, not a row here. */
+model CourseInstructor {
+  id        String   @id @default(cuid())
+  courseId  String
+  userId    String
+  addedById String
+  createdAt DateTime @default(now())
+
+  course  Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user    User   @relation("SubInstructorUser", fields: [userId], references: [id], onDelete: Cascade)
+  addedBy User   @relation("SubInstructorAddedBy", fields: [addedById], references: [id], onDelete: Cascade)
+
+  @@unique([courseId, userId])
+  @@index([userId])
 }
 
 model CourseRequirement {

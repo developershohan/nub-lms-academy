@@ -1,7 +1,7 @@
 import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
-import { canAccessConversation, canAccessCourse, canManageCourse, canAdminAccess } from "@/lib/permissions";
+import { canAccessConversation, canAccessCourse, canManageCourse, canModerateChat } from "@/lib/permissions";
 import { createNotifications } from "@/server/services/notification-service";
 import { logAudit } from "@/lib/audit";
 import type { RoleName } from "@/generated/prisma/client";
@@ -18,33 +18,65 @@ function revalidateChatPaths() {
   revalidatePath("/admin/messages");
 }
 
-/** A DIRECT conversation may only be started with an admin (support-style) or a teacher the
- * caller shares an active enrollment with (in either direction) - otherwise students/teachers
- * could message arbitrary strangers on the platform. */
+const STAFF_ROLES = ["ADMIN", "SUPER_ADMIN", "SUPPORT"] as const;
+const isStaffRoleList = (roles: RoleName[]) => roles.some((r) => (STAFF_ROLES as readonly RoleName[]).includes(r));
+
+/**
+ * A DIRECT conversation may be started when either side is staff (admin/support can message
+ * anyone, and anyone can reach staff - this is the "admin can chat with anyone" / support-contact
+ * path), or the two accounts are connected through a course: teacher <-> their student,
+ * classmate <-> classmate sharing an active enrollment, or sub-instructor <-> the owning teacher
+ * / that course's enrolled students. Otherwise students/teachers could message arbitrary
+ * strangers on the platform.
+ */
 export async function startDirectConversation(userId: string, otherUserId: string) {
   if (userId === otherUserId) return { error: "Cannot message yourself" } as const;
 
-  const other = await prisma.user.findUnique({
-    where: { id: otherUserId },
-    include: { roles: { include: { role: true } } },
-  });
+  const [caller, other] = await Promise.all([
+    prisma.user.findUnique({ where: { id: userId }, include: { roles: { include: { role: true } } } }),
+    prisma.user.findUnique({ where: { id: otherUserId }, include: { roles: { include: { role: true } } } }),
+  ]);
   if (!other || other.status !== "ACTIVE") return { error: "User not found" } as const;
 
-  const otherRoles = other.roles.map((r) => r.role.name);
-  const isOtherStaff = otherRoles.includes("ADMIN") || otherRoles.includes("SUPER_ADMIN");
+  let allowed =
+    isStaffRoleList((caller?.roles ?? []).map((r) => r.role.name)) ||
+    isStaffRoleList(other.roles.map((r) => r.role.name));
 
-  if (!isOtherStaff) {
-    const shared = await prisma.enrollment.findFirst({
+  if (!allowed) {
+    const sharedEnrollment = await prisma.enrollment.findFirst({
       where: {
         status: "ACTIVE",
         OR: [
+          // teacher <-> their student, either direction
           { userId, course: { teacherId: otherUserId } },
           { userId: otherUserId, course: { teacherId: userId } },
+          // classmate <-> classmate: both actively enrolled in the same course
+          { userId, course: { enrollments: { some: { userId: otherUserId, status: "ACTIVE" } } } },
         ],
       },
     });
-    if (!shared) return { error: "You can only message a teacher connected to your courses" } as const;
+    allowed = !!sharedEnrollment;
   }
+
+  if (!allowed) {
+    const sharedViaSubInstructor = await prisma.courseInstructor.findFirst({
+      where: {
+        OR: [
+          // caller is the owning teacher, other is a sub-instructor on caller's course
+          { userId: otherUserId, course: { teacherId: userId } },
+          // other is the owning teacher, caller is a sub-instructor on their course
+          { userId, course: { teacherId: otherUserId } },
+          // caller is sub-instructor, other is a student actively enrolled in that course
+          { userId, course: { enrollments: { some: { userId: otherUserId, status: "ACTIVE" } } } },
+          // other is sub-instructor, caller is a student actively enrolled in that course
+          { userId: otherUserId, course: { enrollments: { some: { userId, status: "ACTIVE" } } } },
+        ],
+      },
+    });
+    allowed = !!sharedViaSubInstructor;
+  }
+
+  if (!allowed) return { error: "You can only message people connected to your courses" } as const;
 
   const existing = await prisma.conversation.findFirst({
     where: {
@@ -59,6 +91,37 @@ export async function startDirectConversation(userId: string, otherUserId: strin
   });
   revalidateChatPaths();
   return { ok: true, conversationId: conversation.id } as const;
+}
+
+/** Staff-only "start a conversation with anyone" search (admin/support chat is otherwise limited
+ * to the same course-connection rules as everyone else - see startDirectConversation). Callers
+ * must check canModerateChat themselves; this has no internal check since it's read-only and the
+ * result set (name/email) mirrors what listUsersForAdmin already exposes to the same audience. */
+export type ChatUserSearchResult = {
+  id: string;
+  name: string | null;
+  email: string;
+  roles: { role: { name: RoleName } }[];
+};
+
+export function searchUsersToMessage(
+  query: string,
+  excludeUserId: string,
+  limit = 20
+): Promise<ChatUserSearchResult[]> {
+  const trimmed = query.trim();
+  if (!trimmed) return Promise.resolve([]);
+
+  return prisma.user.findMany({
+    where: {
+      id: { not: excludeUserId },
+      status: "ACTIVE",
+      OR: [{ name: { contains: trimmed, mode: "insensitive" } }, { email: { contains: trimmed, mode: "insensitive" } }],
+    },
+    select: { id: true, name: true, email: true, roles: { select: { role: { select: { name: true } } } } },
+    take: limit,
+    orderBy: { name: "asc" },
+  });
 }
 
 export async function startSupportConversation(userId: string) {
@@ -293,7 +356,7 @@ export function listRecentMessagesForAdmin(limit = 50) {
 }
 
 export async function hideMessage(actorId: string, messageId: string) {
-  if (!(await canAdminAccess(actorId))) return { error: "Forbidden" } as const;
+  if (!(await canModerateChat(actorId))) return { error: "Forbidden" } as const;
 
   await prisma.message.update({ where: { id: messageId }, data: { deletedAt: new Date() } });
   await logAudit(actorId, "message:moderate", "Message", messageId);
