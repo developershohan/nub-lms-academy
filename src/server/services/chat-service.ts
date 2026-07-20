@@ -343,18 +343,6 @@ export async function reportMessage(userId: string, messageId: string, reason: s
   return { ok: true } as const;
 }
 
-export function listRecentMessagesForAdmin(limit = 50) {
-  return prisma.message.findMany({
-    where: { deletedAt: null },
-    include: {
-      sender: { select: { id: true, name: true, email: true } },
-      conversation: { select: { type: true, course: { select: { title: true } } } },
-    },
-    orderBy: { createdAt: "desc" },
-    take: limit,
-  });
-}
-
 export async function hideMessage(actorId: string, messageId: string) {
   if (!(await canModerateChat(actorId))) return { error: "Forbidden" } as const;
 

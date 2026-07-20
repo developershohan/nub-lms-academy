@@ -23,6 +23,8 @@ function revalidateCoursePaths(courseId: string, slug?: string) {
   if (slug) {
     revalidatePath(`/courses/${slug}`);
     revalidatePath("/courses");
+    revalidatePath("/");
+    revalidatePath("/categories");
   }
 }
 
@@ -36,6 +38,29 @@ export function listPublishedCourses({ q, categorySlug }: { q?: string; category
     include: { category: true, teacher: { select: { name: true } } },
     orderBy: { publishedAt: "desc" },
   });
+}
+
+/**
+ * Admin-curated home page rail. Falls back to the newest published courses when
+ * fewer than `minimum` are explicitly featured, so the home page never renders empty.
+ */
+export async function listFeaturedCourses(limit = 6, minimum = 3) {
+  const include = { category: true, teacher: { select: { name: true } } };
+  const featured = await prisma.course.findMany({
+    where: { status: "PUBLISHED", isFeatured: true },
+    include,
+    orderBy: { publishedAt: "desc" },
+    take: limit,
+  });
+  if (featured.length >= minimum) return featured;
+
+  const fill = await prisma.course.findMany({
+    where: { status: "PUBLISHED", id: { notIn: featured.map((c) => c.id) } },
+    include,
+    orderBy: { publishedAt: "desc" },
+    take: limit - featured.length,
+  });
+  return [...featured, ...fill];
 }
 
 const PUBLIC_COURSE_DETAIL_INCLUDE = {
@@ -240,8 +265,24 @@ export async function unpublishCourse(actorId: string, courseId: string) {
   if (!course) return { error: "Not found" } as const;
   if (course.status !== "PUBLISHED") return { error: "Course is not published" } as const;
 
-  await prisma.course.update({ where: { id: courseId }, data: { status: "APPROVED" } });
+  // Unpublished courses must never surface on the home page rail.
+  await prisma.course.update({ where: { id: courseId }, data: { status: "APPROVED", isFeatured: false } });
   await logAudit(actorId, "course:unpublish", "Course", courseId);
+  revalidateCoursePaths(courseId, course.slug);
+  return { ok: true } as const;
+}
+
+export async function setCourseFeatured(actorId: string, courseId: string, featured: boolean) {
+  if (!(await canAdminAccess(actorId))) return { error: "Forbidden" } as const;
+
+  const course = await prisma.course.findUnique({ where: { id: courseId } });
+  if (!course) return { error: "Not found" } as const;
+  if (featured && course.status !== "PUBLISHED") {
+    return { error: "Only published courses can be featured" } as const;
+  }
+
+  await prisma.course.update({ where: { id: courseId }, data: { isFeatured: featured } });
+  await logAudit(actorId, featured ? "course:feature" : "course:unfeature", "Course", courseId);
   revalidateCoursePaths(courseId, course.slug);
   return { ok: true } as const;
 }

@@ -1,7 +1,9 @@
 import { SiteHeader } from "@/components/layout/site-header";
 import { SiteFooter } from "@/components/layout/site-footer";
 
-export default function PublicLayout({ children }: { children: React.ReactNode }) {
+// The apply page is a public-facing pitch (unlike the teacher dashboard),
+// so it gets the marketing site chrome.
+export default function TeacherApplyLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col">
       <SiteHeader />

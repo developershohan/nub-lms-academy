@@ -5,6 +5,10 @@ export default auth((req) => {
   const { pathname } = req.nextUrl;
   const status = req.auth?.user?.status;
 
+  // The teacher-application pitch is public marketing chrome; the page renders a
+  // login CTA for anonymous visitors and the apply action re-checks auth itself.
+  if (pathname === "/teacher/apply") return NextResponse.next();
+
   const isProtected =
     pathname.startsWith("/student") ||
     pathname.startsWith("/teacher") ||
