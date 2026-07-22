@@ -4,7 +4,7 @@ import { Resend } from "resend";
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 // Resend's shared sandbox sender - works with zero setup but only delivers to the address you
 // signed up with. Switch to a verified custom domain address once one is configured in Resend.
-const FROM = process.env.EMAIL_FROM ?? "NUB Academy <support@proshohan.com>";
+const FROM = process.env.EMAIL_FROM ?? "NUB Academy <support@nubacademy.proshohan.com>";
 
 /** Never throws - a failed email must not break the request that triggered it (registration,
  * password reset, etc. all still succeed even if delivery fails). Logs the reason, not the
