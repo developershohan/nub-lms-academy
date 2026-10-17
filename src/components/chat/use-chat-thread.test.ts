@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// Server actions pull in next-auth; the merge helpers under test are pure.
+vi.mock("@/components/chat/actions", () => ({ deleteMessageAction: vi.fn(), editMessageAction: vi.fn(), reactToMessageAction: vi.fn() }));
+
 import { mergeMessages, newestSeq, type ChatMessage } from "./use-chat-thread";
 
 const message = (seq: number, extra: Partial<ChatMessage> = {}): ChatMessage => ({
@@ -7,10 +11,15 @@ const message = (seq: number, extra: Partial<ChatMessage> = {}): ChatMessage => 
   conversationId: "c1",
   senderId: "u1",
   clientMsgId: null,
+  type: "TEXT",
   content: `message ${seq}`,
   createdAt: new Date(2026, 9, 18, 10, seq).toISOString(),
+  editedAt: null,
   deletedAt: null,
+  removedByModerator: false,
   sender: { id: "u1", name: "Amina" },
+  replyTo: null,
+  reactions: [],
   ...extra,
 });
 
