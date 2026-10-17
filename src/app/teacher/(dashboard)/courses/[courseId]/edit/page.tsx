@@ -1,9 +1,11 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getCurrentUser } from "@/lib/permissions";
 import { getCourseForEdit } from "@/server/services/course-service";
 import { listCategories } from "@/server/services/category-service";
 import { listQuizzesForEdit } from "@/server/services/quiz-service";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CourseDetailsForm } from "@/components/teacher/course-details-form";
 import { CurriculumBuilder } from "@/components/teacher/curriculum-builder";
@@ -36,9 +38,19 @@ export default async function EditCoursePage({
             {course.status === "REJECTED" && course.rejectionReason && (
               <span className="text-sm text-destructive">Reason: {course.rejectionReason}</span>
             )}
+            {(course.status === "APPROVED" || course.status === "PUBLISHED") && (
+              <span className="text-sm text-muted-foreground">
+                Changes stay live and are sent to an admin for review.
+              </span>
+            )}
           </div>
         </div>
-        {canSubmit && <SubmitReviewButton courseId={course.id} />}
+        <div className="flex items-center gap-2">
+          <Button variant="outline" render={<Link href={`/student/course/${course.id}/learn`} />}>
+            Preview as student
+          </Button>
+          {canSubmit && <SubmitReviewButton courseId={course.id} />}
+        </div>
       </div>
 
       <Tabs defaultValue="details">

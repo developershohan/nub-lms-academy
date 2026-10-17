@@ -8,6 +8,7 @@ vi.mock("@/lib/stripe", () => ({ getStripeClient: vi.fn() }));
 vi.mock("@/lib/permissions", () => ({ canAdminAccess: vi.fn().mockResolvedValue(true) }));
 vi.mock("@/lib/audit", () => ({ logAudit: vi.fn() }));
 vi.mock("@/server/services/coupon-service", () => ({ validateCoupon: vi.fn(), calculateDiscount: vi.fn() }));
+vi.mock("@/server/services/notification-service", () => ({ notifyAdmins: vi.fn() }));
 vi.mock("@/server/services/settings-service", () => ({
   getPlatformSettings: vi.fn().mockResolvedValue({ autoApprovePayments: true }),
 }));
@@ -102,19 +103,24 @@ describe("refundOrder", () => {
     expect(prisma.order.update).not.toHaveBeenCalled();
   });
 
-  it("refunds through Stripe before marking the order refunded", async () => {
+  it("refunds through Stripe (once per order, via an idempotency key) before marking it refunded", async () => {
     const refundsCreate = vi.fn().mockResolvedValue({});
     getStripeClientMock.mockReturnValue({ refunds: { create: refundsCreate } });
     prisma.order.findUnique.mockResolvedValue(paidOrder);
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
 
     await expect(refundOrder("admin-1", "order-1")).resolves.toEqual({ ok: true });
 
-    expect(refundsCreate).toHaveBeenCalledWith({ payment_intent: "pi_1" });
-    expect(prisma.order.update).toHaveBeenCalledWith({ where: { id: "order-1" }, data: { status: "REFUNDED" } });
+    expect(refundsCreate).toHaveBeenCalledWith({ payment_intent: "pi_1" }, { idempotencyKey: "refund:order-1" });
+    expect(prisma.order.updateMany).toHaveBeenCalledWith({
+      where: { id: "order-1", status: { in: ["PAID"] } },
+      data: { status: "REFUNDED" },
+    });
   });
 
   it("still refunds a $0 coupon order locally, since it never went through Stripe", async () => {
     prisma.order.findUnique.mockResolvedValue({ ...paidOrder, total: 0, stripePaymentIntentId: null });
+    prisma.order.updateMany.mockResolvedValue({ count: 1 });
 
     await expect(refundOrder("admin-1", "order-1")).resolves.toEqual({ ok: true });
     expect(getStripeClientMock).not.toHaveBeenCalled();

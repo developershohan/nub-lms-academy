@@ -21,8 +21,11 @@ const bricolage = Bricolage_Grotesque({
 });
 
 export const metadata: Metadata = {
-  title: "NUB Academy LMS",
-  description: "Learning management platform",
+  // Resolves relative canonical/Open Graph URLs (pages pass paths like /courses/<slug>).
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"),
+  title: { default: "NUB Academy", template: "%s | NUB Academy" },
+  description: "Online courses from Northern University Bangladesh instructors - learn at your own pace and earn a certificate.",
+  openGraph: { siteName: "NUB Academy", type: "website" },
 };
 
 export default function RootLayout({
@@ -44,6 +47,12 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
+          <a
+            href="#main-content"
+            className="sr-only rounded-md bg-primary text-sm font-medium text-primary-foreground shadow-lg outline-2 outline-offset-2 outline-ring focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-100 focus:px-4 focus:py-2"
+          >
+            Skip to content
+          </a>
           <NextTopLoader showSpinner={false} />
           {children}
           <Toaster />

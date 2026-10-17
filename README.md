@@ -265,7 +265,13 @@ Run the complete local quality gate before opening a pull request:
 npm run check
 ```
 
-GitHub Actions runs Prisma generation and validation, linting, type checking, tests, and the production build for pull requests and pushes to `master`.
+Payment, permission and account-security flows also have integration tests that run the real services against a real PostgreSQL. The tests start a throwaway database themselves (via `embedded-postgres`, so no Docker or local install is needed), apply the migrations and delete it afterwards. They never touch `DATABASE_URL`.
+
+```bash
+npm run test:integration
+```
+
+GitHub Actions runs Prisma generation and validation, linting, type checking, unit and integration tests, and the production build for pull requests and pushes to `master`.
 
 When changing authorization, payments, enrollment, quizzes, or database transactions, add focused tests for successful requests and rejected unauthorized or invalid requests.
 
@@ -298,6 +304,8 @@ Configure Stripe to send events to:
 ```text
 https://YOUR_APP_DOMAIN/api/v1/webhooks/stripe
 ```
+
+Subscribe the endpoint to these events: `checkout.session.completed`, `checkout.session.expired`, `charge.refunded`, `charge.dispute.created`, `charge.dispute.closed`, `customer.subscription.created`, `customer.subscription.updated` and `customer.subscription.deleted`. Each event id is recorded in the `StripeEvent` table, so redelivered events are acknowledged without being applied twice.
 
 Store the endpoint signing secret in `STRIPE_WEBHOOK_SECRET`. For local webhook testing, use the Stripe CLI and forward events to the local endpoint.
 

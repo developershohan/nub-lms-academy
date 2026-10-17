@@ -5,6 +5,8 @@ import { canManageCourse, canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { slugify } from "@/lib/slug";
 import { recomputeCourseCompletion } from "@/server/services/progress-service";
+import { notifyAdmins } from "@/server/services/notification-service";
+import { refreshCourseStats } from "@/server/services/course-stats-service";
 import type { CourseDetailsInput, LessonInput } from "@/lib/validations/course";
 
 function linesToItems(text: string | undefined) {
@@ -27,6 +29,37 @@ function revalidateCoursePaths(courseId: string, slug?: string) {
     revalidatePath("/");
     revalidatePath("/categories");
   }
+}
+
+/**
+ * Once an admin has reviewed a course (APPROVED or PUBLISHED), a teacher edit to its details,
+ * price or lessons flags it for re-review instead of slipping through unseen - previously a course
+ * could be approved and then have its price, videos or lessons swapped. The course stays live (no
+ * downtime for enrolled students); every change is audit-logged, and admins are notified on the
+ * first change since the last review. Full drafts/revisions come with the instructor studio.
+ */
+async function flagChangedSinceReview(
+  courseId: string,
+  actorId: string,
+  change: string,
+  details: Record<string, string | number | null> = {}
+) {
+  const course = await prisma.course.findUnique({
+    where: { id: courseId },
+    select: { status: true, title: true, changedSinceReviewAt: true },
+  });
+  if (!course || (course.status !== "APPROVED" && course.status !== "PUBLISHED")) return;
+
+  await prisma.course.update({ where: { id: courseId }, data: { changedSinceReviewAt: new Date() } });
+  await logAudit(actorId, "course:changed-after-review", "Course", courseId, { change, ...details });
+  if (course.changedSinceReviewAt) return; // admins were already told about this round of changes
+
+  await notifyAdmins({
+    type: "course-review",
+    title: `"${course.title}" changed after review`,
+    body: `The teacher changed: ${change}`,
+    link: "/admin/courses",
+  });
 }
 
 export function listPublishedCourses({ q, categorySlug }: { q?: string; categorySlug?: string } = {}) {
@@ -123,14 +156,19 @@ export function listCoursesForAdmin() {
   });
 }
 
-/** Full lesson content for the learning page - caller must check canAccessCourse first. */
+/** Full lesson content for the learning player - caller must check canAccessCourse first.
+ * createdAt breaks sortOrder ties, so the lesson order (and with it previous/next) is the same on every request. */
 export function getCourseForLearning(courseId: string) {
   return prisma.course.findUnique({
     where: { id: courseId },
     include: {
+      teacher: { select: { name: true } },
+      category: { select: { name: true, slug: true } },
       sections: {
-        orderBy: { sortOrder: "asc" },
-        include: { lessons: { orderBy: { sortOrder: "asc" }, include: { videoAsset: true } } },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        include: {
+          lessons: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }], include: { videoAsset: true } },
+        },
       },
     },
   });
@@ -164,6 +202,10 @@ export async function createCourse(teacherId: string, title: string) {
 export async function updateCourseDetails(courseId: string, userId: string, data: CourseDetailsInput) {
   if (!(await canManageCourse(userId, courseId))) return { error: "Forbidden" } as const;
 
+  const before = await prisma.course.findUnique({
+    where: { id: courseId },
+    select: { price: true, salePrice: true },
+  });
   const course = await prisma.$transaction(async (tx) => {
     const updated = await tx.course.update({
       where: { id: courseId },
@@ -192,6 +234,13 @@ export async function updateCourseDetails(courseId: string, userId: string, data
     return updated;
   });
 
+  await refreshCourseStats(courseId);
+  await flagChangedSinceReview(courseId, userId, "course details", {
+    previousPrice: before ? Number(before.price) : null,
+    previousSalePrice: before?.salePrice != null ? Number(before.salePrice) : null,
+    price: data.price,
+    salePrice: data.salePrice ?? null,
+  });
   revalidateCoursePaths(courseId, course.slug);
   return { ok: true } as const;
 }
@@ -227,7 +276,7 @@ export async function approveCourse(actorId: string, courseId: string) {
   if (!course) return { error: "Not found" } as const;
   if (course.status !== "IN_REVIEW") return { error: "Course is not awaiting review" } as const;
 
-  await prisma.course.update({ where: { id: courseId }, data: { status: "APPROVED" } });
+  await prisma.course.update({ where: { id: courseId }, data: { status: "APPROVED", changedSinceReviewAt: null } });
   await logAudit(actorId, "course:approve", "Course", courseId);
   revalidateCoursePaths(courseId);
   return { ok: true } as const;
@@ -269,6 +318,19 @@ export async function unpublishCourse(actorId: string, courseId: string) {
   // Unpublished courses must never surface on the home page rail.
   await prisma.course.update({ where: { id: courseId }, data: { status: "APPROVED", isFeatured: false } });
   await logAudit(actorId, "course:unpublish", "Course", courseId);
+  revalidateCoursePaths(courseId, course.slug);
+  return { ok: true } as const;
+}
+
+/** Admin sign-off on the changes a teacher made after review (see flagChangedSinceReview). */
+export async function markCourseReviewed(actorId: string, courseId: string) {
+  if (!(await canAdminAccess(actorId))) return { error: "Forbidden" } as const;
+
+  const course = await prisma.course.findUnique({ where: { id: courseId }, select: { slug: true } });
+  if (!course) return { error: "Not found" } as const;
+
+  await prisma.course.update({ where: { id: courseId }, data: { changedSinceReviewAt: null } });
+  await logAudit(actorId, "course:changes-reviewed", "Course", courseId);
   revalidateCoursePaths(courseId, course.slug);
   return { ok: true } as const;
 }
@@ -332,6 +394,8 @@ export async function deleteSection(sectionId: string, userId: string) {
   await prisma.courseSection.delete({ where: { id: sectionId } });
   // Its lessons went with it, which may leave some students with every remaining lesson done.
   await recomputeCourseCompletion(courseId);
+  await refreshCourseStats(courseId);
+  await flagChangedSinceReview(courseId, userId, "section removed", { sectionId });
   revalidatePath(`/teacher/courses/${courseId}/edit`);
   return { ok: true } as const;
 }
@@ -365,6 +429,8 @@ export async function createLesson(sectionId: string, userId: string, data: Less
     },
   });
   await recomputeCourseCompletion(courseId);
+  await refreshCourseStats(courseId);
+  await flagChangedSinceReview(courseId, userId, "lesson added", { lessonId: lesson.id, title: data.title });
   revalidatePath(`/teacher/courses/${courseId}/edit`);
   return { ok: true, lesson } as const;
 }
@@ -396,6 +462,12 @@ export async function updateLesson(lessonId: string, userId: string, data: Lesso
     }
   });
 
+  await refreshCourseStats(courseId);
+  await flagChangedSinceReview(courseId, userId, "lesson edited", {
+    lessonId,
+    title: data.title,
+    videoUrl: data.type === "VIDEO" ? data.videoUrl || null : null,
+  });
   revalidatePath(`/teacher/courses/${courseId}/edit`);
   return { ok: true } as const;
 }
@@ -406,6 +478,8 @@ export async function deleteLesson(lessonId: string, userId: string) {
 
   await prisma.lesson.delete({ where: { id: lessonId } });
   await recomputeCourseCompletion(courseId);
+  await refreshCourseStats(courseId);
+  await flagChangedSinceReview(courseId, userId, "lesson removed", { lessonId });
   revalidatePath(`/teacher/courses/${courseId}/edit`);
   return { ok: true } as const;
 }

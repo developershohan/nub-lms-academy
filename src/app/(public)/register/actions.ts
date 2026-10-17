@@ -1,6 +1,8 @@
 "use server";
 
+import { headers } from "next/headers";
 import { registerSchema } from "@/lib/validations/auth";
+import { clientIp } from "@/lib/rate-limit";
 import { registerUser } from "@/server/services/auth-service";
 import { redirectAuthenticatedUser } from "@/lib/permissions";
 
@@ -17,7 +19,7 @@ export async function registerAction(
     return { error: parsed.error.issues[0].message };
   }
 
-  const result = await registerUser(parsed.data);
+  const result = await registerUser(parsed.data, { ip: clientIp(await headers()) });
   if ("error" in result) return { error: result.error };
   return { success: true };
 }

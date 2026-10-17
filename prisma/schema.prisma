@@ -45,6 +45,9 @@ model User {
   phone         String?
   address       String?
   status        UserStatus @default(ACTIVE)
+  /// Bumped on ban, password change and password reset. Every JWT carries the version it was
+  /// issued under and is rejected once they differ, so those events sign out every session.
+  sessionVersion Int       @default(0)
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
@@ -57,6 +60,7 @@ model User {
   courses        Course[]
   enrollments    Enrollment[]
   lessonProgress LessonProgress[]
+  lessonNotes    LessonNote[]
   reviews        CourseReview[]
   wishlist       Wishlist[]
   quizAttempts   QuizAttempt[]
@@ -219,6 +223,17 @@ model Course {
   status                 CourseStatus @default(DRAFT)
   rejectionReason        String?
   publishedAt            DateTime?
+  /// Set when the teacher edits an APPROVED or PUBLISHED course (details, price, lessons), so an
+  /// admin re-reviews it; cleared by "Mark reviewed". The course stays live meanwhile.
+  changedSinceReviewAt   DateTime?
+  /// Denormalised for catalogue search, sorting and filtering - recomputed by refreshCourseStats
+  /// (src/server/services/course-stats-service.ts) whenever reviews, lessons or prices change.
+  ratingAvg              Float        @default(0)
+  ratingCount            Int          @default(0)
+  totalDurationSec       Int          @default(0)
+  lessonCount            Int          @default(0)
+  /// salePrice ?? price - what checkout actually charges, so catalogue price sorts and filters are right.
+  effectivePrice         Decimal      @default(0) @db.Decimal(10, 2)
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
 
@@ -242,6 +257,8 @@ model Course {
 
   @@index([status])
   @@index([status, isFeatured])
+  @@index([status, ratingAvg])
+  @@index([status, effectivePrice])
   @@index([teacherId])
   @@index([categoryId])
 }
@@ -315,6 +332,7 @@ model Lesson {
   section    CourseSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
   videoAsset VideoAsset?
   progress   LessonProgress[]
+  notes      LessonNote[]
   quiz       Quiz?
 
   @@index([sectionId])
@@ -373,7 +391,26 @@ model LessonProgress {
   watchedSeconds Int       @default(0)
   completed      Boolean   @default(false)
   completedAt    DateTime?
+  /// When the student last opened this lesson in the player - the learn page resumes there.
+  lastViewedAt   DateTime?
   updatedAt      DateTime  @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId])
+  @@index([lessonId])
+}
+
+/// A student's private notes on one lesson (one notepad per student per lesson). Only the author
+/// ever reads them, and saving requires lesson access (canAccessLesson).
+model LessonNote {
+  id        String   @id @default(cuid())
+  userId    String
+  lessonId  String
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
@@ -528,6 +565,8 @@ enum OrderStatus {
   FAILED
   CANCELLED
   REFUNDED
+  /// A chargeback is open in Stripe: access is suspended until it closes (won -> PAID, lost -> REFUNDED).
+  DISPUTED
 }
 
 enum DiscountType {
@@ -562,6 +601,7 @@ model Order {
 
   @@index([userId])
   @@index([status])
+  @@index([stripePaymentIntentId])
 }
 
 model OrderItem {
@@ -764,4 +804,21 @@ model PlatformSetting {
   id                  String   @id @default("singleton")
   autoApprovePayments Boolean  @default(true)
   updatedAt           DateTime @updatedAt
+}
+
+/// Fixed-window counters for rate limiting sign-in, sign-up and password reset (src/lib/rate-limit.ts).
+/// Postgres-backed until Redis arrives in the real-time phase; one tiny row per key.
+model RateLimit {
+  key     String   @id
+  count   Int
+  resetAt DateTime
+}
+
+/// Stripe webhook events already handled, keyed by Stripe's event id. Stripe delivers at least
+/// once, so a redelivered event is acknowledged without being applied twice
+/// (src/server/services/stripe-webhook-service.ts).
+model StripeEvent {
+  id         String   @id
+  type       String
+  receivedAt DateTime @default(now())
 }

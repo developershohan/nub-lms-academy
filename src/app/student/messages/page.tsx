@@ -1,9 +1,13 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
+import { MessagesSquare } from "lucide-react";
 import { getCurrentUser } from "@/lib/permissions";
 import { listConversationSummariesForUser } from "@/server/services/chat-service";
 import { listTeachersForStudent, listStudentEnrollments, listClassmates } from "@/server/services/enrollment-service";
 import { listSubInstructorsForStudent } from "@/server/services/course-instructor-service";
 import { ChatShell, type ChatContact } from "@/components/chat/chat-shell";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 
 export default async function StudentMessagesPage() {
   const user = await getCurrentUser();
@@ -56,6 +60,24 @@ export default async function StudentMessagesPage() {
         initialConversations={conversations}
         contacts={contacts}
         showContactSupport
+        emptyState={
+          <EmptyState
+            icon={MessagesSquare}
+            title="No messages yet"
+            description={
+              enrollments.length > 0
+                ? "Ask your teacher a question, join a course's group chat or say hello to a classmate. Pick someone from the list to start."
+                : "Once you enroll in a course you can message its teacher and classmates here. Need help now? Choose Customer support under Message staff."
+            }
+            className="flex-1 justify-center rounded-none border-0 bg-transparent"
+          >
+            {enrollments.length === 0 && (
+              <Button size="lg" render={<Link href="/courses" />}>
+                Browse courses
+              </Button>
+            )}
+          </EmptyState>
+        }
       />
     </div>
   );

@@ -2,10 +2,12 @@
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { MessagesSquare } from "lucide-react";
 import { useSocket } from "@/hooks/use-socket";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary } from "@/server/services/chat-service";
 import {
@@ -45,6 +47,7 @@ export function ChatShell({
   showContactSupport = false,
   isModerator = false,
   allowStaffSearch = false,
+  emptyState,
 }: {
   currentUser: { id: string; name: string | null };
   initialConversations: ConversationSummary[];
@@ -53,6 +56,8 @@ export function ChatShell({
   isModerator?: boolean;
   /** Admin/support "chat with anyone" - a live user search instead of a fixed contact list. */
   allowStaffSearch?: boolean;
+  /** Shown in the message pane until the first conversation exists; defaults to a generic prompt. */
+  emptyState?: React.ReactNode;
 }) {
   const { socket, connected, error: socketError } = useSocket();
   const [conversations, setConversations] = useState(initialConversations);
@@ -323,13 +328,12 @@ export function ChatShell({
         )}
 
         <div className="space-y-1">
-          {conversations.length === 0 && <p className="text-sm text-muted-foreground">No conversations yet.</p>}
           {conversations.map((c) => (
             <button
               key={c.id}
               onClick={() => openConversation(c.id)}
               className={cn(
-                "block w-full rounded-md border p-2 text-left text-sm",
+                "block w-full rounded-md border p-2 text-left text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
                 c.id === selectedId ? "bg-muted" : "hover:bg-muted/50"
               )}
             >
@@ -344,8 +348,18 @@ export function ChatShell({
       </div>
 
       <div className="flex min-h-[420px] flex-col rounded-lg border">
-        {!selected ? (
-          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+        {!selected && conversations.length === 0 ? (
+          (emptyState ?? (
+            <EmptyState
+              icon={MessagesSquare}
+              title="No conversations yet"
+              description="Pick someone from the list to start chatting. New messages arrive instantly."
+              className="flex-1 justify-center rounded-none border-0 bg-transparent"
+            />
+          ))
+        ) : !selected ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+            <MessagesSquare className="size-6" aria-hidden />
             Select a conversation
           </div>
         ) : (

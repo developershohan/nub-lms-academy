@@ -8,8 +8,18 @@ export function listQuizzesForCourse(courseId: string) {
   return prisma.quiz.findMany({
     where: { courseId },
     orderBy: { sortOrder: "asc" },
-    select: { id: true, title: true, _count: { select: { questions: true } } },
+    select: { id: true, title: true, lessonId: true, _count: { select: { questions: true } } },
   });
+}
+
+/** Quizzes in the course the student has passed at least once. */
+export async function listPassedQuizIds(userId: string, courseId: string) {
+  const attempts = await prisma.quizAttempt.findMany({
+    where: { userId, status: "SUBMITTED", passed: true, quiz: { courseId } },
+    select: { quizId: true },
+    distinct: ["quizId"],
+  });
+  return new Set(attempts.map((a) => a.quizId));
 }
 
 /** Questions/options only - never the `isCorrect` flags - safe to show while an attempt is open. */

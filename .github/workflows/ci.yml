@@ -37,4 +37,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:run
+      # Real services against a throwaway PostgreSQL started by the tests themselves
+      # (embedded-postgres) - never the DATABASE_URL above.
+      - run: npm run test:integration
       - run: npm run build

@@ -24,7 +24,9 @@ export default async function ProfileLayout({ children }: { children: React.Reac
           <SignOutButton />
         </div>
       </header>
-      <main className="mx-auto max-w-2xl p-6">{children}</main>
+      <main id="main-content" tabIndex={-1} className="mx-auto max-w-2xl p-4 outline-none sm:p-6">
+        {children}
+      </main>
     </div>
   );
 }

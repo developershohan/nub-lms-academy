@@ -1,9 +1,11 @@
 import "server-only";
 import bcrypt from "bcryptjs";
-import { randomBytes } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { sendVerificationEmail, sendPasswordResetEmail } from "@/lib/email";
 import { findUserByEmail } from "@/lib/user-by-email";
+import { disconnectUserSockets } from "@/lib/realtime";
+import { limitAuthAttempt, tooManyAttemptsMessage } from "@/lib/rate-limit";
 import { normalizeEmail, type RegisterInput, type ResetPasswordInput } from "@/lib/validations/auth";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
@@ -15,7 +17,17 @@ const RESET_TOKEN_TTL_MS = 1000 * 60 * 30; // 30min
 // key already keeps the two kinds of token from ever colliding for the same email.
 const verifyIdentifier = (email: string) => `email-verify:${email}`;
 
-export async function registerUser({ name, email: rawEmail, password }: RegisterInput) {
+/** Only a SHA-256 of each emailed token is stored, so a leaked database (or backup) can't be used
+ * to reset passwords or verify emails - the raw token exists only in the link that was emailed. */
+const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
+
+/** Request context the caller (server action or API route) knows and a service doesn't. */
+type RequestMeta = { ip?: string | null };
+
+export async function registerUser({ name, email: rawEmail, password }: RegisterInput, { ip }: RequestMeta = {}) {
+  const limit = await limitAuthAttempt("register", { ip });
+  if (limit.limited) return { error: tooManyAttemptsMessage(limit.retryAfterSec), rateLimited: true } as const;
+
   // registerSchema already lowercases, but this is the one place accounts are created from user
   // input, so normalise here too - and check case-insensitively against older mixed-case rows.
   const email = normalizeEmail(rawEmail);
@@ -48,7 +60,7 @@ export async function sendEmailVerification(email: string) {
 
   const token = randomBytes(32).toString("hex");
   await prisma.verificationToken.create({
-    data: { identifier, token, expires: new Date(Date.now() + VERIFY_TOKEN_TTL_MS) },
+    data: { identifier, token: hashToken(token), expires: new Date(Date.now() + VERIFY_TOKEN_TTL_MS) },
   });
 
   const verifyUrl = `${APP_URL}/verify-email?token=${token}&email=${encodeURIComponent(email)}`;
@@ -61,14 +73,18 @@ export async function sendEmailVerification(email: string) {
 /** Generic no-op for a nonexistent or already-verified email, same anti-enumeration reasoning as
  * password reset - the caller (a "resend verification" button) shouldn't be able to probe which
  * emails have accounts. */
-export async function resendVerificationEmail(email: string) {
+export async function resendVerificationEmail(email: string, { ip }: RequestMeta = {}) {
+  // Silently skipped when limited, like the not-found case: the caller shows the same message.
+  const limit = await limitAuthAttempt("verificationEmail", { email: normalizeEmail(email), ip });
+  if (limit.limited) return;
   const user = await findUserByEmail(email);
   if (!user || user.emailVerified) return;
   await sendEmailVerification(user.email);
 }
 
-export async function verifyEmail(email: string, token: string) {
+export async function verifyEmail(email: string, rawToken: string) {
   const identifier = verifyIdentifier(email);
+  const token = hashToken(rawToken);
   const record = await prisma.verificationToken.findUnique({
     where: { identifier_token: { identifier, token } },
   });
@@ -83,16 +99,21 @@ export async function verifyEmail(email: string, token: string) {
   return { ok: true } as const;
 }
 
-export async function requestPasswordReset(typedEmail: string) {
+export async function requestPasswordReset(typedEmail: string, { ip }: RequestMeta = {}) {
+  // Limited per typed address and per IP whether or not the account exists, so the limit itself
+  // reveals nothing about which emails have accounts.
+  const limit = await limitAuthAttempt("passwordReset", { email: normalizeEmail(typedEmail), ip });
+  if (limit.limited) return { error: tooManyAttemptsMessage(limit.retryAfterSec), rateLimited: true } as const;
+
   const user = await findUserByEmail(typedEmail);
-  if (!user?.passwordHash) return; // Don't reveal whether the email exists.
+  if (!user?.passwordHash) return { ok: true } as const; // Don't reveal whether the email exists.
   // The stored address (not whatever casing was typed) goes into the token and the link, so
   // resetPassword's exact lookup below matches the account.
   const email = user.email;
 
   const token = randomBytes(32).toString("hex");
   await prisma.verificationToken.create({
-    data: { identifier: email, token, expires: new Date(Date.now() + RESET_TOKEN_TTL_MS) },
+    data: { identifier: email, token: hashToken(token), expires: new Date(Date.now() + RESET_TOKEN_TTL_MS) },
   });
 
   const resetUrl = `${APP_URL}/reset-password?token=${token}&email=${encodeURIComponent(email)}`;
@@ -102,9 +123,18 @@ export async function requestPasswordReset(typedEmail: string) {
   if (!result.ok && process.env.NODE_ENV !== "production") {
     console.log(`Password reset link for ${email}: ${resetUrl}`);
   }
+  return { ok: true } as const;
 }
 
-export async function resetPassword(email: string, { token, password }: ResetPasswordInput) {
+export async function resetPassword(
+  email: string,
+  { token: rawToken, password }: ResetPasswordInput,
+  { ip }: RequestMeta = {}
+) {
+  const limit = await limitAuthAttempt("passwordReset", { ip });
+  if (limit.limited) return { error: tooManyAttemptsMessage(limit.retryAfterSec), rateLimited: true } as const;
+
+  const token = hashToken(rawToken);
   const record = await prisma.verificationToken.findUnique({
     where: { identifier_token: { identifier: email, token } },
   });
@@ -113,9 +143,12 @@ export async function resetPassword(email: string, { token, password }: ResetPas
   }
 
   const passwordHash = await bcrypt.hash(password, 12);
-  await prisma.$transaction([
-    prisma.user.update({ where: { email }, data: { passwordHash } }),
-    prisma.verificationToken.delete({ where: { identifier_token: { identifier: email, token } } }),
+  const [user] = await prisma.$transaction([
+    // A reset usually means the old password is compromised: end every existing session.
+    prisma.user.update({ where: { email }, data: { passwordHash, sessionVersion: { increment: 1 } } }),
+    // Every outstanding reset link for this address dies with the one just used.
+    prisma.verificationToken.deleteMany({ where: { identifier: email } }),
   ]);
+  disconnectUserSockets(user.id);
   return { ok: true } as const;
 }

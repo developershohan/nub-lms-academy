@@ -11,6 +11,7 @@ import {
   excludeFromSubscriptionAction,
   featureCourseAction,
   unfeatureCourseAction,
+  markCourseReviewedAction,
   type ActionState,
 } from "@/app/admin/courses/actions";
 import { Button } from "@/components/ui/button";
@@ -32,11 +33,14 @@ export function CourseReviewActions({
   status,
   isSubscriptionIncluded,
   isFeatured = false,
+  changedSinceReview = false,
 }: {
   courseId: string;
   status: string;
   isSubscriptionIncluded: boolean;
   isFeatured?: boolean;
+  /** The teacher edited it after it was approved - see flagChangedSinceReview. */
+  changedSinceReview?: boolean;
 }) {
   const [approveState, approveAction] = useActionState(approveCourseAction, initialState);
   const [rejectState, rejectAction] = useActionState(rejectCourseAction, initialState);
@@ -50,6 +54,7 @@ export function CourseReviewActions({
     isFeatured ? unfeatureCourseAction : featureCourseAction,
     initialState
   );
+  const [reviewedState, reviewedAction] = useActionState(markCourseReviewedAction, initialState);
   const [showReject, setShowReject] = useState(false);
 
   const error =
@@ -58,11 +63,18 @@ export function CourseReviewActions({
     publishState.error ??
     unpublishState.error ??
     subscriptionState.error ??
-    featuredState.error;
+    featuredState.error ??
+    reviewedState.error;
 
   return (
     <div className="flex flex-col items-end gap-2">
-      <div className="flex gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
+        {changedSinceReview && (
+          <form action={reviewedAction}>
+            <input type="hidden" name="courseId" value={courseId} />
+            <ActionButton label="Mark changes reviewed" pendingLabel="Saving..." />
+          </form>
+        )}
         {status === "IN_REVIEW" && (
           <>
             <form action={approveAction}>
@@ -106,7 +118,7 @@ export function CourseReviewActions({
         </form>
       </div>
       {showReject && (
-        <form action={rejectAction} className="flex w-64 flex-col items-end gap-2">
+        <form action={rejectAction} className="flex w-64 max-w-full flex-col items-end gap-2">
           <input type="hidden" name="courseId" value={courseId} />
           <Textarea name="reason" placeholder="Reason for rejection" required rows={2} />
           <ActionButton label="Confirm reject" pendingLabel="Rejecting..." variant="outline" />

@@ -83,22 +83,47 @@ export async function recordLessonProgress(
   revalidatePath(`/student/course/${courseId}/learn`);
   revalidatePath("/student/dashboard");
   revalidatePath("/student/my-courses");
+  return { ok: true, courseId } as const;
+}
+
+/**
+ * Remembers that the student opened this lesson, so the player resumes here next time. Touches
+ * only lastViewedAt - viewing never changes completion. Deliberately no revalidatePath: nothing
+ * on screen changes, and re-rendering the player on every lesson open would be wasted work.
+ */
+export async function recordLessonView(userId: string, lessonId: string, now = new Date()) {
+  if (!(await canAccessLesson(userId, lessonId))) return { error: "Forbidden" } as const;
+
+  await prisma.lessonProgress.upsert({
+    where: { userId_lessonId: { userId, lessonId } },
+    create: { userId, lessonId, lastViewedAt: now },
+    update: { lastViewedAt: now },
+  });
   return { ok: true } as const;
+}
+
+/** Floored, so a course shows 100% only when every lesson is actually done. */
+export function progressPercent(completedLessons: number, totalLessons: number) {
+  return totalLessons ? Math.floor((Math.min(completedLessons, totalLessons) / totalLessons) * 100) : 0;
 }
 
 export async function getCourseProgress(userId: string, courseId: string) {
   const [totalLessons, completedLessons, lastProgress] = await Promise.all([
     prisma.lesson.count({ where: { section: { courseId } } }),
     prisma.lessonProgress.count({ where: { userId, completed: true, lesson: { section: { courseId } } } }),
+    // The last lesson opened in the player; rows from before lastViewedAt existed fall back to
+    // their last progress update.
     prisma.lessonProgress.findFirst({
       where: { userId, lesson: { section: { courseId } } },
-      orderBy: { updatedAt: "desc" },
+      orderBy: [{ lastViewedAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
+      select: { lessonId: true },
     }),
   ]);
   return {
     totalLessons,
     completedLessons,
-    percent: totalLessons ? Math.round((completedLessons / totalLessons) * 100) : 0,
+    percent: progressPercent(completedLessons, totalLessons),
+    isComplete: totalLessons > 0 && completedLessons >= totalLessons,
     lastLessonId: lastProgress?.lessonId ?? null,
   };
 }

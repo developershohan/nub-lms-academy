@@ -6,7 +6,8 @@ vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/permissions", () => ({ canAccessLesson: vi.fn().mockResolvedValue(true) }));
 
 import { prisma as prismaClient } from "@/lib/prisma";
-import { recomputeCourseCompletion } from "./progress-service";
+import { canAccessLesson } from "@/lib/permissions";
+import { getCourseProgress, progressPercent, recomputeCourseCompletion, recordLessonView } from "./progress-service";
 
 const prisma = prismaClient as unknown as PrismaMock;
 const done = new Date("2026-09-01");
@@ -79,5 +80,68 @@ describe("recomputeCourseCompletion", () => {
     await recomputeCourseCompletion("course-1");
 
     expect(prisma.enrollment.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("recordLessonView", () => {
+  const now = new Date("2026-10-17T12:00:00Z");
+
+  it("stamps lastViewedAt without touching completion", async () => {
+    await expect(recordLessonView("amina", "lesson-3", now)).resolves.toEqual({ ok: true });
+
+    expect(prisma.lessonProgress.upsert).toHaveBeenCalledWith({
+      where: { userId_lessonId: { userId: "amina", lessonId: "lesson-3" } },
+      create: { userId: "amina", lessonId: "lesson-3", lastViewedAt: now },
+      update: { lastViewedAt: now },
+    });
+  });
+
+  it("ignores lessons the student can't access", async () => {
+    vi.mocked(canAccessLesson).mockResolvedValueOnce(false);
+
+    await expect(recordLessonView("amina", "lesson-3", now)).resolves.toEqual({ error: "Forbidden" });
+    expect(prisma.lessonProgress.upsert).not.toHaveBeenCalled();
+  });
+});
+
+describe("getCourseProgress", () => {
+  it("resumes from the most recently viewed lesson", async () => {
+    prisma.lesson.count.mockResolvedValue(4);
+    prisma.lessonProgress.count.mockResolvedValue(1);
+    prisma.lessonProgress.findFirst.mockResolvedValue({ lessonId: "lesson-3" });
+
+    await expect(getCourseProgress("amina", "course-1")).resolves.toEqual({
+      totalLessons: 4,
+      completedLessons: 1,
+      percent: 25,
+      isComplete: false,
+      lastLessonId: "lesson-3",
+    });
+    expect(prisma.lessonProgress.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderBy: [{ lastViewedAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
+      })
+    );
+  });
+
+  it("is complete only when every lesson is done", async () => {
+    prisma.lesson.count.mockResolvedValue(3);
+    prisma.lessonProgress.count.mockResolvedValue(3);
+    prisma.lessonProgress.findFirst.mockResolvedValue(null);
+
+    await expect(getCourseProgress("amina", "course-1")).resolves.toMatchObject({
+      percent: 100,
+      isComplete: true,
+      lastLessonId: null,
+    });
+  });
+});
+
+describe("progressPercent", () => {
+  it("rounds down, so 100% always means finished", () => {
+    expect(progressPercent(199, 200)).toBe(99);
+    expect(progressPercent(1, 3)).toBe(33);
+    expect(progressPercent(2, 2)).toBe(100);
+    expect(progressPercent(0, 0)).toBe(0);
   });
 });

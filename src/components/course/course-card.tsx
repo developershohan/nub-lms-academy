@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
+import { RatingStars } from "@/components/course/rating-stars";
+import { formatTotalDuration } from "@/lib/format";
 import { categoryStyle } from "@/lib/category-style";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +22,10 @@ export function CourseCard({
     level: string;
     category: { name: string; slug: string } | null;
     teacher: { name: string | null };
+    ratingAvg?: number;
+    ratingCount?: number;
+    totalDurationSec?: number;
+    lessonCount?: number;
   };
 }) {
   const price = Number(course.price);
@@ -71,6 +77,19 @@ export function CourseCard({
           </h3>
           {course.subtitle && (
             <p className="line-clamp-2 text-sm text-muted-foreground">{course.subtitle}</p>
+          )}
+          {(course.ratingCount ?? 0) > 0 && (
+            <p className="flex items-center gap-1.5 text-xs">
+              <span className="font-semibold text-amber-foreground dark:text-amber">{course.ratingAvg!.toFixed(1)}</span>
+              <RatingStars value={course.ratingAvg!} />
+              <span className="text-muted-foreground">({course.ratingCount})</span>
+            </p>
+          )}
+          {(course.lessonCount ?? 0) > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {(course.totalDurationSec ?? 0) > 0 && `${formatTotalDuration(course.totalDurationSec!)} · `}
+              {course.lessonCount} {course.lessonCount === 1 ? "lesson" : "lessons"}
+            </p>
           )}
           <div className="mt-auto flex items-center justify-between pt-2 text-sm">
             <span className="text-muted-foreground">{course.teacher.name ?? "Unknown instructor"}</span>

@@ -94,6 +94,9 @@ export async function createSubscriptionCheckoutSession(userId: string, planId: 
       subscription_data: { metadata: { userId, planId } },
       success_url: `${baseUrl}/student/billing?success=1`,
       cancel_url: `${baseUrl}/pricing`,
+    }, {
+      // Repeat clicks within the same minute get the same Checkout session, not a second one.
+      idempotencyKey: `subscription-checkout:${userId}:${planId}:${Math.floor(Date.now() / 60_000)}`,
     });
     return { ok: true, checkoutUrl: session.url! } as const;
   } catch (err) {

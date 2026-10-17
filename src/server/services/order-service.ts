@@ -7,6 +7,8 @@ import { canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { validateCoupon, calculateDiscount } from "@/server/services/coupon-service";
 import { getPlatformSettings } from "@/server/services/settings-service";
+import { notifyAdmins } from "@/server/services/notification-service";
+import type { OrderStatus } from "@/generated/prisma/client";
 
 function revalidateOrderPaths() {
   revalidatePath("/student/billing");
@@ -77,6 +79,9 @@ export async function createCheckoutSession(userId: string, courseId: string, co
       success_url: `${baseUrl}/api/v1/orders/confirm-checkout?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/courses/${course.slug}`,
       metadata: { orderId: order.id },
+    }, {
+      // One Stripe session per order, however many times this call is retried.
+      idempotencyKey: `checkout-session:${order.id}`,
     });
 
     await prisma.order.update({ where: { id: order.id }, data: { stripeCheckoutSessionId: session.id } });
@@ -187,6 +192,104 @@ export async function adminMarkOrderPaid(actorId: string, orderId: string) {
   return { ok: true } as const;
 }
 
+/**
+ * Moves an order to REFUNDED and ends its enrollments - after an admin refund went through Stripe,
+ * or when Stripe reports a full refund made elsewhere (the dashboard) or a lost dispute. The status
+ * change is conditional inside the transaction, so the admin action and the charge.refunded webhook
+ * it triggers record the refund once between them.
+ */
+async function applyRefund(orderId: string, { from, stripeEventId }: { from: OrderStatus[]; stripeEventId?: string }) {
+  const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+  if (!order) return false;
+
+  const applied = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.order.updateMany({
+      where: { id: orderId, status: { in: from } },
+      data: { status: "REFUNDED" },
+    });
+    if (count === 0) return false;
+    await tx.payment.create({
+      data: { orderId, amount: order.total, currency: order.currency, status: "REFUNDED", stripeEventId },
+    });
+    await tx.enrollment.updateMany({
+      where: { userId: order.userId, courseId: { in: order.items.map((item) => item.courseId) } },
+      data: { status: "REFUNDED" },
+    });
+    return true;
+  });
+
+  if (applied) {
+    revalidateOrderPaths();
+    revalidatePath("/student/my-courses");
+  }
+  return applied;
+}
+
+/**
+ * A chargeback freezes the purchase: the order becomes DISPUTED and its courses are suspended
+ * (REVOKED) until Stripe closes the dispute - restored if it's won, refunded if it's lost. Admins are
+ * alerted because evidence has to be submitted in the Stripe dashboard before Stripe's deadline.
+ */
+async function applyDisputeOpened(orderId: string, stripeEventId: string) {
+  const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+  if (!order) return;
+
+  const applied = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.order.updateMany({ where: { id: orderId, status: "PAID" }, data: { status: "DISPUTED" } });
+    if (count === 0) return false;
+    await tx.payment.create({
+      data: { orderId, amount: order.total, currency: order.currency, status: "DISPUTED", stripeEventId },
+    });
+    await tx.enrollment.updateMany({
+      where: { userId: order.userId, courseId: { in: order.items.map((item) => item.courseId) }, status: "ACTIVE" },
+      data: { status: "REVOKED" },
+    });
+    return true;
+  });
+  if (!applied) return;
+
+  await notifyAdmins({
+    type: "payment-dispute",
+    title: "A payment was disputed",
+    body: `Order ${orderId} has a chargeback; course access is suspended until it closes. Respond in the Stripe dashboard.`,
+    link: "/admin/orders",
+  });
+  revalidateOrderPaths();
+  revalidatePath("/student/my-courses");
+}
+
+/** A dispute closed in our favour (or an inquiry closed without a chargeback): back to PAID. */
+async function applyDisputeWon(orderId: string, stripeEventId: string) {
+  const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
+  if (!order) return;
+
+  const applied = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.order.updateMany({ where: { id: orderId, status: "DISPUTED" }, data: { status: "PAID" } });
+    if (count === 0) return false;
+    await tx.payment.create({
+      data: { orderId, amount: order.total, currency: order.currency, status: "PAID", stripeEventId },
+    });
+    await tx.enrollment.updateMany({
+      where: { userId: order.userId, courseId: { in: order.items.map((item) => item.courseId) }, status: "REVOKED" },
+      data: { status: "ACTIVE" },
+    });
+    return true;
+  });
+  if (applied) {
+    revalidateOrderPaths();
+    revalidatePath("/student/my-courses");
+  }
+}
+
+function stripeId(ref: string | { id: string } | null | undefined) {
+  return typeof ref === "string" ? ref : (ref?.id ?? null);
+}
+
+function findOrderByPaymentIntent(paymentIntent: string | { id: string } | null | undefined) {
+  const id = stripeId(paymentIntent);
+  return id ? prisma.order.findFirst({ where: { stripePaymentIntentId: id } }) : null;
+}
+
 async function markOrderFailed(orderId: string, event: { id?: string }) {
   const order = await prisma.order.findUnique({ where: { id: orderId } });
   if (!order || order.status !== "PENDING") return;
@@ -221,6 +324,23 @@ export async function handleStripeWebhookEvent(event: Stripe.Event) {
     const session = event.data.object as Stripe.Checkout.Session;
     const orderId = session.metadata?.orderId;
     if (orderId) await markOrderFailed(orderId, { id: event.id });
+  } else if (event.type === "charge.refunded") {
+    // Covers refunds made in the Stripe dashboard, which used to leave the order PAID and the
+    // course open. A partial refund keeps the purchase (and access); only a full one ends it.
+    const charge = event.data.object as Stripe.Charge;
+    if (!charge.refunded) return;
+    const order = await findOrderByPaymentIntent(charge.payment_intent);
+    if (order) await applyRefund(order.id, { from: ["PAID", "DISPUTED"], stripeEventId: event.id });
+  } else if (event.type === "charge.dispute.created") {
+    const dispute = event.data.object as Stripe.Dispute;
+    const order = await findOrderByPaymentIntent(dispute.payment_intent);
+    if (order) await applyDisputeOpened(order.id, event.id);
+  } else if (event.type === "charge.dispute.closed") {
+    const dispute = event.data.object as Stripe.Dispute;
+    const order = await findOrderByPaymentIntent(dispute.payment_intent);
+    if (!order) return;
+    if (dispute.status === "lost") await applyRefund(order.id, { from: ["DISPUTED"], stripeEventId: event.id });
+    else await applyDisputeWon(order.id, event.id);
   }
 }
 
@@ -268,27 +388,18 @@ export async function refundOrder(actorId: string, orderId: string) {
     const stripe = getStripeClient();
     if (!stripe) return { error: "Stripe isn't configured, so the refund can't be sent" } as const;
     try {
-      await stripe.refunds.create({ payment_intent: order.stripePaymentIntentId });
+      // Same key for the same order: a double click or a retry can't refund the payment twice.
+      await stripe.refunds.create(
+        { payment_intent: order.stripePaymentIntentId },
+        { idempotencyKey: `refund:${order.id}` }
+      );
     } catch (err) {
       return { error: err instanceof Error ? err.message : "Stripe refund failed" } as const;
     }
   }
 
-  await prisma.$transaction(async (tx) => {
-    await tx.order.update({ where: { id: orderId }, data: { status: "REFUNDED" } });
-    await tx.payment.create({
-      data: { orderId, amount: order.total, currency: order.currency, status: "REFUNDED" },
-    });
-    for (const item of order.items) {
-      await tx.enrollment.updateMany({
-        where: { userId: order.userId, courseId: item.courseId },
-        data: { status: "REFUNDED" },
-      });
-    }
-  });
-
+  // Stripe's charge.refunded webhook may already have applied it; either way it's recorded once.
+  await applyRefund(orderId, { from: ["PAID"] });
   await logAudit(actorId, "order:refund", "Order", orderId);
-  revalidateOrderPaths();
-  revalidatePath("/student/my-courses");
   return { ok: true } as const;
 }

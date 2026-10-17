@@ -272,6 +272,21 @@ async function seedDemoCatalogue() {
         },
       });
     }
+
+    // The catalogue sorts and filters on these stored numbers (see course-stats-service.ts).
+    const lessonStats = await prisma.lesson.aggregate({
+      where: { section: { courseId: created.id } },
+      _sum: { durationSec: true },
+      _count: true,
+    });
+    await prisma.course.update({
+      where: { id: created.id },
+      data: {
+        totalDurationSec: lessonStats._sum.durationSec ?? 0,
+        lessonCount: lessonStats._count,
+        effectivePrice: course.salePrice ?? course.price,
+      },
+    });
   }
   console.log(`Seeded ${DEMO_CATEGORIES.length} categories, ${DEMO_TEACHERS.length} demo teachers, ${DEMO_COURSES.length} published courses.`);
 }

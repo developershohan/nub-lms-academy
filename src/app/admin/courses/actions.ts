@@ -9,6 +9,7 @@ import {
   unpublishCourse,
   setCourseSubscriptionIncluded,
   setCourseFeatured,
+  markCourseReviewed,
 } from "@/server/services/course-service";
 
 export type ActionState = { error?: string };
@@ -96,5 +97,14 @@ export async function excludeFromSubscriptionAction(
 
   const courseId = formData.get("courseId") as string;
   const result = await setCourseSubscriptionIncluded(userId, courseId, false);
+  return "error" in result ? { error: result.error } : {};
+}
+
+export async function markCourseReviewedAction(_prevState: ActionState, formData: FormData): Promise<ActionState> {
+  const userId = await requireUserId();
+  if (!userId) return { error: "Not authenticated" };
+
+  const courseId = formData.get("courseId") as string;
+  const result = await markCourseReviewed(userId, courseId);
   return "error" in result ? { error: result.error } : {};
 }

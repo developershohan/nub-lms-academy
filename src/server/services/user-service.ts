@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { sendEmailVerification } from "@/server/services/auth-service";
+import { disconnectUserSockets } from "@/lib/realtime";
 import type { UpdateProfileInput } from "@/lib/validations/profile";
 
 export function listUsersForAdmin(q?: string) {
@@ -42,9 +43,11 @@ export async function banUser(actorId: string, userId: string, reason: string) {
   }
 
   await prisma.$transaction([
-    prisma.user.update({ where: { id: userId }, data: { status: "BANNED" } }),
+    // sessionVersion bump = every session of theirs ends on its next request (see auth.ts).
+    prisma.user.update({ where: { id: userId }, data: { status: "BANNED", sessionVersion: { increment: 1 } } }),
     prisma.userBan.create({ data: { userId, bannedById: actorId, reason } }),
   ]);
+  disconnectUserSockets(userId);
   await logAudit(actorId, "user:ban", "User", userId, { reason });
   revalidateUserPaths();
   return { ok: true } as const;
@@ -164,7 +167,9 @@ export async function changePassword(userId: string, currentPassword: string, ne
   if (!valid) return { error: "Current password is incorrect" } as const;
 
   const passwordHash = await bcrypt.hash(newPassword, 12);
-  await prisma.user.update({ where: { id: userId }, data: { passwordHash } });
+  // Ends every session, including this one - whoever else knew the old password is signed out.
+  await prisma.user.update({ where: { id: userId }, data: { passwordHash, sessionVersion: { increment: 1 } } });
+  disconnectUserSockets(userId);
   revalidateProfilePaths();
   return { ok: true } as const;
 }
