@@ -60,6 +60,7 @@ model User {
   courses        Course[]
   enrollments    Enrollment[]
   lessonProgress LessonProgress[]
+  lessonNotes    LessonNote[]
   reviews        CourseReview[]
   wishlist       Wishlist[]
   quizAttempts   QuizAttempt[]
@@ -321,6 +322,7 @@ model Lesson {
   section    CourseSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
   videoAsset VideoAsset?
   progress   LessonProgress[]
+  notes      LessonNote[]
   quiz       Quiz?
 
   @@index([sectionId])
@@ -379,7 +381,26 @@ model LessonProgress {
   watchedSeconds Int       @default(0)
   completed      Boolean   @default(false)
   completedAt    DateTime?
+  /// When the student last opened this lesson in the player - the learn page resumes there.
+  lastViewedAt   DateTime?
   updatedAt      DateTime  @updatedAt
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId])
+  @@index([lessonId])
+}
+
+/// A student's private notes on one lesson (one notepad per student per lesson). Only the author
+/// ever reads them, and saving requires lesson access (canAccessLesson).
+model LessonNote {
+  id        String   @id @default(cuid())
+  userId    String
+  lessonId  String
+  content   String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   lesson Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)

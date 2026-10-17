@@ -78,6 +78,22 @@ export async function listCertificateEligibleCourses(userId: string) {
   return eligible;
 }
 
+/**
+ * What the learning player offers a student who finished a course: their certificate if one was
+ * issued, a way to claim it if they've earned it, or nothing (quizzes still to pass, a revoked
+ * certificate, or a teacher/admin previewing without an enrollment).
+ */
+export async function getCourseCertificateStatus(userId: string, courseId: string) {
+  const existing = await prisma.certificate.findUnique({
+    where: { userId_courseId: { userId, courseId } },
+    select: { id: true, revoked: true },
+  });
+  if (existing?.revoked) return { status: "unavailable" } as const;
+  if (existing) return { status: "issued", certificateId: existing.id } as const;
+  if (await canGenerateCertificate(userId, courseId)) return { status: "ready" } as const;
+  return { status: "unavailable" } as const;
+}
+
 export async function getCertificateForStudent(userId: string, certificateId: string) {
   const certificate = await prisma.certificate.findUnique({ where: { id: certificateId } });
   if (!certificate || certificate.userId !== userId) return null;

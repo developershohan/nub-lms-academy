@@ -156,13 +156,19 @@ export function listCoursesForAdmin() {
 }
 
 /** Full lesson content for the learning page - caller must check canAccessCourse first. */
+/** The learning player's view of a course. createdAt breaks sortOrder ties, so the lesson order
+ * (and with it previous/next) is the same on every request. */
 export function getCourseForLearning(courseId: string) {
   return prisma.course.findUnique({
     where: { id: courseId },
     include: {
+      teacher: { select: { name: true } },
+      category: { select: { name: true, slug: true } },
       sections: {
-        orderBy: { sortOrder: "asc" },
-        include: { lessons: { orderBy: { sortOrder: "asc" }, include: { videoAsset: true } } },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+        include: {
+          lessons: { orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }], include: { videoAsset: true } },
+        },
       },
     },
   });
