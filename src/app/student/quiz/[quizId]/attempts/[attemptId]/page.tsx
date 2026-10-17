@@ -17,6 +17,8 @@ export default async function QuizAttemptResultPage({
 
   const attempt = await getAttemptResult(user.id, attemptId);
   if (!attempt || attempt.status !== "SUBMITTED") notFound();
+  // Correct answers stay hidden until the student passes or runs out of attempts.
+  const reveal = attempt.revealAnswers;
 
   return (
     <div className="mx-auto max-w-2xl space-y-6 p-6">
@@ -26,6 +28,12 @@ export default async function QuizAttemptResultPage({
           {attempt.passed ? "Passed" : "Failed"} · {attempt.score}%
         </Badge>
       </div>
+
+      {!reveal && (
+        <p className="text-sm text-muted-foreground">
+          Correct answers are shown once you pass this quiz or use your last attempt.
+        </p>
+      )}
 
       <div className="space-y-3">
         {attempt.answers.map((answer, index) => (
@@ -38,19 +46,21 @@ export default async function QuizAttemptResultPage({
             <CardContent className="space-y-1">
               {answer.question.options.map((option) => {
                 const wasSelected = answer.selectedOptionIds.includes(option.id);
+                const isCorrect = reveal && option.isCorrect;
                 return (
                   <div
                     key={option.id}
                     className={cn(
                       "flex items-center justify-between rounded-md border px-3 py-1.5 text-sm",
-                      option.isCorrect && "border-green-600 bg-green-50 dark:bg-green-950",
-                      wasSelected && !option.isCorrect && "border-destructive bg-destructive/10"
+                      !reveal && wasSelected && "border-primary bg-muted",
+                      isCorrect && "border-green-600 bg-green-50 dark:bg-green-950",
+                      reveal && wasSelected && !option.isCorrect && "border-destructive bg-destructive/10"
                     )}
                   >
                     <span>{option.content}</span>
                     <span className="text-xs text-muted-foreground">
                       {wasSelected && "Your answer"}
-                      {option.isCorrect && (wasSelected ? " · Correct" : "Correct answer")}
+                      {isCorrect && (wasSelected ? " · Correct" : "Correct answer")}
                     </span>
                   </div>
                 );

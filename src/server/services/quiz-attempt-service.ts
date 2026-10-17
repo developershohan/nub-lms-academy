@@ -2,6 +2,7 @@ import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { canAccessCourse, canAttemptQuiz } from "@/lib/permissions";
+import { canRevealAnswers, isAttemptExpired, quizDeadline } from "@/lib/quiz-rules";
 
 export function listQuizzesForCourse(courseId: string) {
   return prisma.quiz.findMany({
@@ -27,8 +28,32 @@ export async function getQuizForTaking(userId: string, quizId: string) {
   return quiz;
 }
 
+/** An attempt left open past its time limit (+ grace) is closed as a failed, zero-score
+ * submission. Answers sent after the deadline aren't graded - otherwise the time limit is only
+ * enforced by the browser, and a student could keep the attempt open and look answers up. */
+async function closeExpiredAttempt(attemptId: string) {
+  await prisma.quizAttempt.updateMany({
+    where: { id: attemptId, status: "IN_PROGRESS" },
+    data: { status: "SUBMITTED", score: 0, passed: false, submittedAt: new Date() },
+  });
+}
+
+/** The open attempt, if any - an expired one is closed here (see closeExpiredAttempt) so the quiz
+ * page and startQuizAttempt never resume an attempt whose time has run out. `remainingMs` (null
+ * without a time limit) drives the countdown; sending time left rather than a deadline keeps it
+ * independent of the student's clock. */
 export async function getInProgressAttempt(userId: string, quizId: string) {
-  return prisma.quizAttempt.findFirst({ where: { userId, quizId, status: "IN_PROGRESS" } });
+  const attempt = await prisma.quizAttempt.findFirst({
+    where: { userId, quizId, status: "IN_PROGRESS" },
+    include: { quiz: { select: { timeLimitSec: true } } },
+  });
+  if (!attempt) return null;
+  if (isAttemptExpired(attempt.startedAt, attempt.quiz.timeLimitSec)) {
+    await closeExpiredAttempt(attempt.id);
+    return null;
+  }
+  const deadline = quizDeadline(attempt.startedAt, attempt.quiz.timeLimitSec);
+  return { ...attempt, remainingMs: deadline ? Math.max(0, deadline.getTime() - Date.now()) : null };
 }
 
 export function listAttemptHistory(userId: string, quizId: string) {
@@ -58,6 +83,11 @@ export async function submitQuizAttempt(userId: string, attemptId: string, formD
   });
   if (!attempt || attempt.userId !== userId) return { error: "Not found" } as const;
   if (attempt.status === "SUBMITTED") return { error: "This attempt was already submitted" } as const;
+  if (isAttemptExpired(attempt.startedAt, attempt.quiz.timeLimitSec)) {
+    await closeExpiredAttempt(attemptId);
+    revalidatePath(`/student/quiz/${attempt.quizId}`);
+    return { error: "Time's up - this attempt went past the time limit and was recorded with a score of 0" } as const;
+  }
 
   let earnedPoints = 0;
   let totalPoints = 0;
@@ -89,6 +119,9 @@ export async function submitQuizAttempt(userId: string, attemptId: string, formD
   return { ok: true, score, passed } as const;
 }
 
+/** `revealAnswers` says whether the page may show which options were correct (see
+ * canRevealAnswers) - showing them after every failed attempt handed out the answer key for the
+ * next one. */
 export async function getAttemptResult(userId: string, attemptId: string) {
   const attempt = await prisma.quizAttempt.findUnique({
     where: { id: attemptId },
@@ -100,5 +133,18 @@ export async function getAttemptResult(userId: string, attemptId: string) {
     },
   });
   if (!attempt || attempt.userId !== userId) return null;
-  return attempt;
+
+  const [submittedAttempts, passedAttempt] = await Promise.all([
+    prisma.quizAttempt.count({ where: { userId, quizId: attempt.quizId, status: "SUBMITTED" } }),
+    prisma.quizAttempt.findFirst({
+      where: { userId, quizId: attempt.quizId, status: "SUBMITTED", passed: true },
+      select: { id: true },
+    }),
+  ]);
+  const revealAnswers = canRevealAnswers({
+    hasPassed: !!passedAttempt,
+    maxAttempts: attempt.quiz.maxAttempts,
+    submittedAttempts,
+  });
+  return { ...attempt, revealAnswers };
 }

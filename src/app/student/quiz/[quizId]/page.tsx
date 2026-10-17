@@ -27,7 +27,7 @@ export default async function QuizPage({ params }: { params: Promise<{ quizId: s
           <h1 className="text-2xl font-semibold">{quiz.title}</h1>
           {quiz.description && <p className="text-muted-foreground">{quiz.description}</p>}
         </div>
-        <QuizAttemptForm attemptId={inProgress.id} questions={quiz.questions} />
+        <QuizAttemptForm attemptId={inProgress.id} questions={quiz.questions} remainingMs={inProgress.remainingMs} />
       </div>
     );
   }
@@ -48,7 +48,7 @@ export default async function QuizPage({ params }: { params: Promise<{ quizId: s
           <p className="text-sm text-muted-foreground">
             {quiz.questions.length} questions · Passing score {quiz.passingScore}%
             {quiz.maxAttempts != null && ` · Max ${quiz.maxAttempts} attempts`}
-            {quiz.timeLimitSec != null && ` · Time limit ${Math.round(quiz.timeLimitSec / 60)} min`}
+            {!!quiz.timeLimitSec && ` · Time limit ${Math.max(1, Math.round(quiz.timeLimitSec / 60))} min`}
           </p>
           {canAttempt ? (
             <StartQuizButton quizId={quizId} label={history.length > 0 ? "Retake quiz" : "Start quiz"} />
