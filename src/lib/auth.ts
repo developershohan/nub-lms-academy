@@ -6,6 +6,7 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { loginSchema } from "@/lib/validations/auth";
+import { findUserByEmail } from "@/lib/user-by-email";
 import type { RoleName } from "@/generated/prisma/client";
 
 /** Thrown from authorize() when credentials are correct but the email isn't verified yet - kept
@@ -53,9 +54,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const parsed = loginSchema.safeParse(rawCredentials);
         if (!parsed.success) return null;
 
-        const user = await prisma.user.findUnique({
-          where: { email: parsed.data.email },
-        });
+        const user = await findUserByEmail(parsed.data.email);
         // Same generic failure for "no such user" and "wrong password" -
         // never reveal which one it was.
         if (!user?.passwordHash) return null;

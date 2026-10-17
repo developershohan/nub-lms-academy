@@ -190,14 +190,17 @@ export async function canAccessCourse(userId: string, courseId: string): Promise
   });
   if (!course) return false;
   if (course.teacherId === userId) return true;
-  if (course.status !== "PUBLISHED") return false;
 
+  // An enrollment (purchase, free, coupon, admin grant) is checked before course status on
+  // purpose: unpublishing or archiving takes a course out of the catalog for NEW students, never
+  // away from the ones who already enrolled (and possibly paid) for it.
   const enrollment = await prisma.enrollment.findUnique({ where: { userId_courseId: { userId, courseId } } });
   if (enrollment?.status === "ACTIVE") return true;
+  if (course.status !== "PUBLISHED") return false;
 
   // Subscription access is live, not a one-time grant: it only holds while isSubscriptionIncluded
-  // is true and the subscription is currently ACTIVE, so it disappears on its own if either lapses -
-  // no Enrollment row is created for it, unlike a purchase or free enrollment.
+  // is true, the course is published and the subscription is currently ACTIVE, so it disappears on
+  // its own if any of those lapse - no Enrollment row is created for it, unlike a purchase.
   if (course.isSubscriptionIncluded) {
     const subscription = await prisma.subscription.findFirst({ where: { userId, status: "ACTIVE" } });
     if (subscription) return true;
@@ -205,14 +208,16 @@ export async function canAccessCourse(userId: string, courseId: string): Promise
   return false;
 }
 
-/** Preview lessons are visible to anyone (even signed out); everything else requires course access. */
+/** Preview lessons of a published course are visible to anyone (even signed out); everything
+ * else - including every lesson of an unpublished course - requires course access, which
+ * enrolled students keep after an unpublish (see canAccessCourse). */
 export async function canAccessLesson(userId: string | null, lessonId: string): Promise<boolean> {
   const lesson = await prisma.lesson.findUnique({
     where: { id: lessonId },
     select: { isPreview: true, section: { select: { courseId: true, course: { select: { status: true } } } } },
   });
-  if (!lesson || lesson.section.course.status !== "PUBLISHED") return false;
-  if (lesson.isPreview) return true;
+  if (!lesson) return false;
+  if (lesson.isPreview && lesson.section.course.status === "PUBLISHED") return true;
   if (!userId) return false;
   return canAccessCourse(userId, lesson.section.courseId);
 }
@@ -235,21 +240,22 @@ export async function canAttemptQuiz(userId: string, quizId: string): Promise<bo
 }
 
 /**
- * Enrolled + active + course published + every lesson completed + every quiz in the course
- * passed at least once. Whether a certificate already exists is an idempotency concern for the
- * generate step, not an eligibility one - this only answers "have they earned it".
+ * Enrolled + active + every lesson completed + every quiz in the course passed at least once.
+ * Course status is deliberately not checked: like lesson access, a student who enrolled keeps
+ * the ability to finish (and certify) a course after it's unpublished or archived. Whether a
+ * certificate already exists is an idempotency concern for the generate step, not an
+ * eligibility one - this only answers "have they earned it".
  */
 export async function canGenerateCertificate(userId: string, courseId: string): Promise<boolean> {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user || user.status !== "ACTIVE") return false;
 
-  const course = await prisma.course.findUnique({ where: { id: courseId }, select: { status: true } });
-  if (!course || course.status !== "PUBLISHED") return false;
-
   const enrollment = await prisma.enrollment.findUnique({ where: { userId_courseId: { userId, courseId } } });
   if (!enrollment || enrollment.status !== "ACTIVE" || !enrollment.completedAt) return false;
 
-  const quizzes = await prisma.quiz.findMany({ where: { courseId }, select: { id: true } });
+  // A quiz with no questions can't be passed (its score is always 0), so it must not block the
+  // certificate - only quizzes a student can actually take count toward eligibility.
+  const quizzes = await prisma.quiz.findMany({ where: { courseId, questions: { some: {} } }, select: { id: true } });
   if (quizzes.length === 0) return true;
 
   const passedQuizIds = await prisma.quizAttempt.findMany({

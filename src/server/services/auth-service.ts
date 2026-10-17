@@ -3,7 +3,8 @@ import bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { sendVerificationEmail, sendPasswordResetEmail } from "@/lib/email";
-import type { RegisterInput, ResetPasswordInput } from "@/lib/validations/auth";
+import { findUserByEmail } from "@/lib/user-by-email";
+import { normalizeEmail, type RegisterInput, type ResetPasswordInput } from "@/lib/validations/auth";
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
 const VERIFY_TOKEN_TTL_MS = 1000 * 60 * 60 * 24; // 24h
@@ -14,8 +15,11 @@ const RESET_TOKEN_TTL_MS = 1000 * 60 * 30; // 30min
 // key already keeps the two kinds of token from ever colliding for the same email.
 const verifyIdentifier = (email: string) => `email-verify:${email}`;
 
-export async function registerUser({ name, email, password }: RegisterInput) {
-  const existing = await prisma.user.findUnique({ where: { email } });
+export async function registerUser({ name, email: rawEmail, password }: RegisterInput) {
+  // registerSchema already lowercases, but this is the one place accounts are created from user
+  // input, so normalise here too - and check case-insensitively against older mixed-case rows.
+  const email = normalizeEmail(rawEmail);
+  const existing = await findUserByEmail(email);
   // Unlike login/password-reset, registration intentionally tells the user the
   // email is taken - the confusing alternative is a fake "created" message.
   if (existing) return { error: "An account with this email already exists" } as const;
@@ -58,9 +62,9 @@ export async function sendEmailVerification(email: string) {
  * password reset - the caller (a "resend verification" button) shouldn't be able to probe which
  * emails have accounts. */
 export async function resendVerificationEmail(email: string) {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await findUserByEmail(email);
   if (!user || user.emailVerified) return;
-  await sendEmailVerification(email);
+  await sendEmailVerification(user.email);
 }
 
 export async function verifyEmail(email: string, token: string) {
@@ -79,9 +83,12 @@ export async function verifyEmail(email: string, token: string) {
   return { ok: true } as const;
 }
 
-export async function requestPasswordReset(email: string) {
-  const user = await prisma.user.findUnique({ where: { email } });
+export async function requestPasswordReset(typedEmail: string) {
+  const user = await findUserByEmail(typedEmail);
   if (!user?.passwordHash) return; // Don't reveal whether the email exists.
+  // The stored address (not whatever casing was typed) goes into the token and the link, so
+  // resetPassword's exact lookup below matches the account.
+  const email = user.email;
 
   const token = randomBytes(32).toString("hex");
   await prisma.verificationToken.create({

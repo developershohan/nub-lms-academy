@@ -33,8 +33,9 @@ export async function loginAction(_prevState: LoginState, formData: FormData): P
     throw error;
   }
 
-  const user = await prisma.user.findUnique({
-    where: { email: parsed.data.email },
+  // Case-insensitive so accounts registered before emails were lowercased land on the right home.
+  const user = await prisma.user.findFirst({
+    where: { email: { equals: parsed.data.email, mode: "insensitive" } },
     include: { roles: { include: { role: true } } },
   });
   const roles = user?.roles.map((r) => r.role.name) ?? [];
