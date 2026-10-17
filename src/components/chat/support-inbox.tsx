@@ -152,7 +152,7 @@ function TicketQueue({ currentUser, initialConversationId }: { currentUser: { id
   ) : null;
 
   return (
-    <div className="grid h-[calc(100dvh-14rem)] min-h-[480px] overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 md:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[340px_minmax(0,1fr)_18rem]">
+    <div className="grid h-[calc(100dvh-14rem)] min-h-[480px] grid-cols-[minmax(0,1fr)] overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 md:grid-cols-[320px_minmax(0,1fr)] xl:grid-cols-[340px_minmax(0,1fr)_18rem]">
       <aside className={cn("flex min-h-0 flex-col border-r", selected && "hidden md:flex")} aria-label="Support tickets">
         <div className="space-y-2 border-b p-3">
           <div className="grid grid-cols-2 gap-2">

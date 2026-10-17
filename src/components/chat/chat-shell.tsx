@@ -43,8 +43,27 @@ type InboxUpdate = Partial<
   Pick<ConversationSummary, "unread" | "lastSeq" | "lastMessageAt" | "blocked" | "canPost" | "postingBlockedReason" | "mutedUntil" | "ticket">
 > & { conversationId: string; preview?: string };
 
-const byActivity = (a: ConversationSummary, b: ConversationSummary) =>
-  (b.lastMessageAt ?? "").localeCompare(a.lastMessageAt ?? "");
+const CHANNEL_ORDER = ["GENERAL", "ANNOUNCEMENTS", "QA", "BATCH"] as const;
+
+/**
+ * Most recent activity first, with each course's channels kept together (#general,
+ * #announcements, #q-and-a, then batches), placed by the course's latest message.
+ */
+function sortInbox(list: ConversationSummary[]) {
+  const group = (c: ConversationSummary) => (c.type === "COURSE_GROUP" && c.courseId ? `course:${c.courseId}` : c.id);
+  const latest = new Map<string, string>();
+  for (const c of list) {
+    const key = group(c);
+    const at = c.lastMessageAt ?? "";
+    if (!latest.has(key) || at > latest.get(key)!) latest.set(key, at);
+  }
+  return [...list].sort((a, b) => {
+    const [ga, gb] = [group(a), group(b)];
+    // Ties fall back to the group key, so a course's channels can't be split by another conversation.
+    if (ga !== gb) return latest.get(gb)!.localeCompare(latest.get(ga)!) || ga.localeCompare(gb);
+    return CHANNEL_ORDER.indexOf(a.channel ?? "GENERAL") - CHANNEL_ORDER.indexOf(b.channel ?? "GENERAL") || a.label.localeCompare(b.label);
+  });
+}
 
 const TYPE_LABEL: Record<ConversationSummary["type"], string> = {
   DIRECT: "Direct message",
@@ -52,7 +71,6 @@ const TYPE_LABEL: Record<ConversationSummary["type"], string> = {
   SUPPORT: "Support",
 };
 const TICKET_STATUS = { OPEN: "Open", PENDING: "Waiting on you", RESOLVED: "Resolved", CLOSED: "Closed" } as const;
-const CHANNEL_ORDER = ["GENERAL", "ANNOUNCEMENTS", "QA", "BATCH"] as const;
 
 const wideQuery = "(min-width: 1280px)";
 function useIsWide() {
@@ -96,7 +114,7 @@ export function ChatShell({
   emptyState?: React.ReactNode;
 }) {
   const { socket, connected, error: socketError } = useSocket();
-  const [conversations, setConversations] = useState(() => [...initialConversations].sort(byActivity));
+  const [conversations, setConversations] = useState(() => sortInbox(initialConversations));
   const [selectedId, setSelectedId] = useState<string | null>(
     initialSelectedId && initialConversations.some((c) => c.id === initialSelectedId) ? initialSelectedId : null
   );
@@ -113,7 +131,7 @@ export function ChatShell({
     queueMicrotask(() =>
       setConversations((current) => {
         const known = new Map(current.map((c) => [c.id, c]));
-        return initialConversations.map((c) => ({ ...c, unread: known.has(c.id) ? known.get(c.id)!.unread : c.unread })).sort(byActivity);
+        return sortInbox(initialConversations.map((c) => ({ ...c, unread: known.has(c.id) ? known.get(c.id)!.unread : c.unread })));
       })
     );
   }, [initialConversations]);
@@ -123,7 +141,7 @@ export function ChatShell({
     const result = await getConversationSummaryAction(conversationId);
     if ("error" in result) return;
     const summary = result.conversation;
-    setConversations((current) => (current.some((c) => c.id === summary.id) ? current : [summary, ...current].sort(byActivity)));
+    setConversations((current) => (current.some((c) => c.id === summary.id) ? current : sortInbox([summary, ...current])));
   }, []);
 
   // A notification link to a conversation this user isn't a member of (staff opening a ticket).
@@ -146,8 +164,8 @@ export function ChatShell({
           unknown = !!update.lastSeq;
           return current;
         }
-        return current
-          .map((c) => {
+        return sortInbox(
+          current.map((c) => {
             if (c.id !== update.conversationId) return c;
             const { conversationId: _id, preview, unread, ...rest } = update;
             void _id;
@@ -159,7 +177,7 @@ export function ChatShell({
               ...(preview !== undefined ? { lastMessage: preview } : {}),
             };
           })
-          .sort(byActivity);
+        );
       });
       // Someone started a conversation with this user: fetch it and list it.
       if (unknown) void addConversation(update.conversationId);
@@ -295,7 +313,7 @@ export function ChatShell({
   return (
     <div
       className={cn(
-        "grid h-[calc(100dvh-11rem)] min-h-[480px] overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 md:grid-cols-[320px_minmax(0,1fr)]",
+        "grid h-[calc(100dvh-11rem)] min-h-[480px] grid-cols-[minmax(0,1fr)] overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 md:grid-cols-[320px_minmax(0,1fr)]",
         detailsOpen && selected && isWide && "xl:grid-cols-[320px_minmax(0,1fr)_18rem]"
       )}
     >

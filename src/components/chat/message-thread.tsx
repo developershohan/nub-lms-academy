@@ -470,6 +470,7 @@ export function MessageThread({
         >
           <Pin className="size-3.5 shrink-0 text-amber-foreground dark:text-amber" aria-hidden />
           <span className="min-w-0 flex-1 truncate">
+            <span className="sr-only">Pinned message, show it in the conversation: </span>
             <span className="font-medium">{pinnedMessage.sender.name ?? "Pinned"}:</span> {pinnedMessage.content}
           </span>
         </button>
