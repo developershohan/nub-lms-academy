@@ -73,6 +73,17 @@ model User {
   messages                 Message[]
   notifications            Notification[]
   notificationPreferences  NotificationPreference[]
+  pushSubscriptions        PushSubscription[]
+  messageReactions         MessageReaction[]
+  blocksMade               UserBlock[]              @relation("BlocksMade")
+  blockedBy                UserBlock[]              @relation("BlockedBy")
+  reportsFiled             Report[]                 @relation("ReportsFiled")
+  reportsAgainst           Report[]                 @relation("ReportsAgainst")
+  supportTicketsRequested  SupportTicket[]          @relation("SupportTicketsRequested")
+  supportTicketsAssigned   SupportTicket[]          @relation("SupportTicketsAssigned")
+  lessonQuestions          LessonQuestion[]
+  lessonAnswers            LessonAnswer[]
+  lessonQuestionVotes      LessonQuestionVote[]
   subInstructorOf          CourseInstructor[] @relation("SubInstructorUser")
   addedSubInstructors      CourseInstructor[] @relation("SubInstructorAddedBy")
 
@@ -256,6 +267,7 @@ model Course {
   coupons       Coupon[]
   conversations Conversation[]
   instructors   CourseInstructor[]
+  lessonQuestions LessonQuestion[]
 
   @@index([status])
   @@index([status, isFeatured])
@@ -336,6 +348,7 @@ model Lesson {
   progress   LessonProgress[]
   notes      LessonNote[]
   quiz       Quiz?
+  questions  LessonQuestion[]
 
   @@index([sectionId])
 }
@@ -763,25 +776,51 @@ enum ConversationType {
   SUPPORT
 }
 
+/// A course community's channels. GENERAL is the course group every course has had so far
+/// ("course:<courseId>"); the others are "course:<courseId>:announcements", ":qa" and ":batch:<slug>".
+enum ConversationChannel {
+  GENERAL
+  ANNOUNCEMENTS
+  QA
+  BATCH
+}
+
 model Conversation {
   id            String           @id @default(cuid())
   type          ConversationType
   courseId      String?
   /// Stops concurrent opens from creating duplicates: "direct:<userA>:<userB>" (ids sorted),
-  /// "course:<courseId>", "support:<userId>". Null only on legacy duplicates.
+  /// "course:<courseId>" (+ ":announcements", ":qa", ":batch:<slug>"), "support:<userId>".
+  /// Null only on legacy duplicates.
   uniqueKey     String?          @unique
+  /// COURSE_GROUP only: which channel of the course community this is.
+  channel       ConversationChannel?
+  /// Batch channels carry a label ("Batch 7, Jan 2027"); other conversations are named live.
+  title         String?
+  /// Only OWNER and MODERATOR participants may post (the #announcements channel).
+  announcementOnly Boolean       @default(false)
+  /// Members may post at most once per this many seconds; 0 is off. Moderators are exempt.
+  slowModeSec   Int              @default(0)
+  pinnedMessageId String?
   /// Seq of the newest message - each message takes the next one. Unread = lastSeq - lastReadSeq.
   lastSeq       Int              @default(0)
   lastMessageAt DateTime?
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
 
-  course       Course?                   @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  participants ConversationParticipant[]
-  messages     Message[]
+  course        Course?                   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  participants  ConversationParticipant[]
+  messages      Message[]
+  supportTicket SupportTicket?
 
   @@index([courseId])
   @@index([type])
+}
+
+enum ParticipantRole {
+  OWNER
+  MODERATOR
+  MEMBER
 }
 
 model ConversationParticipant {
@@ -791,13 +830,30 @@ model ConversationParticipant {
   lastReadAt     DateTime?
   /// Seq of the newest message this member has seen. Replaces per-message read receipts.
   lastReadSeq    Int       @default(0)
+  /// The course's teacher owns its channels, co-instructors moderate, everyone else is a member.
+  role           ParticipantRole @default(MEMBER)
+  /// Set by the member: no notifications for this conversation until then.
+  mutedUntil     DateTime?
+  /// Set by a moderator of a course channel: the member can read but not post until then.
+  postingBlockedUntil DateTime?
+  /// Membership follows course access: a refund, revocation or removal sets this instead of
+  /// deleting the row, so the read position survives a re-enrollment.
+  removedAt      DateTime?
+  /// Set when a moderator removed them (holds until access itself changes); null when access was lost.
+  removedById    String?
   createdAt      DateTime  @default(now())
 
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([conversationId, userId])
-  @@index([userId])
+  @@index([userId, removedAt])
+}
+
+enum MessageType {
+  TEXT
+  /// A note the system wrote ("Sam marked this ticket as resolved"), shown centred and grey.
+  SYSTEM
 }
 
 /// deletedAt covers both a sender's own soft delete and admin moderation (chat:moderate) - either
@@ -812,17 +868,131 @@ model Message {
   /// Chosen by the sending browser; a retried send with the same id returns the saved message
   /// instead of posting it twice.
   clientMsgId    String?
+  type           MessageType @default(TEXT)
   content        String    @db.Text
+  replyToId      String?
+  editedAt       DateTime?
+  /// First report, for a quick admin filter; the reports themselves are Report rows.
   reportedAt     DateTime?
   reportReason   String?
   deletedAt      DateTime?
+  /// Who removed it: the sender (own delete) or a moderator. Either way the text stays on the server.
+  deletedById    String?
   createdAt      DateTime  @default(now())
 
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  conversation Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User              @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  replyTo      Message?          @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies      Message[]         @relation("MessageReplies")
+  reactions    MessageReaction[]
+  reports      Report[]
 
   @@unique([conversationId, seq])
   @@unique([senderId, clientMsgId])
+}
+
+model MessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+}
+
+/// A block stops new direct messages in both directions; existing history stays readable.
+model UserBlock {
+  id        String   @id @default(cuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("BlocksMade", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("BlockedBy", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+  @@index([blockedId])
+}
+
+enum ReportTargetType {
+  MESSAGE
+  USER
+  REVIEW
+}
+
+enum ReportStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+/// Reports for staff to review. reviewId is a plain id (no relation) so the course models stay untouched.
+model Report {
+  id           String           @id @default(cuid())
+  reporterId   String?
+  targetType   ReportTargetType
+  messageId    String?
+  targetUserId String?
+  reviewId     String?
+  reason       String?
+  status       ReportStatus     @default(OPEN)
+  resolvedById String?
+  resolvedAt   DateTime?
+  createdAt    DateTime         @default(now())
+
+  reporter   User?    @relation("ReportsFiled", fields: [reporterId], references: [id], onDelete: SetNull)
+  targetUser User?    @relation("ReportsAgainst", fields: [targetUserId], references: [id], onDelete: Cascade)
+  message    Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([reporterId, messageId])
+  @@index([status, createdAt])
+}
+
+enum SupportTicketStatus {
+  /// Waiting on staff.
+  OPEN
+  /// Staff replied; waiting on the customer.
+  PENDING
+  RESOLVED
+  CLOSED
+}
+
+enum SupportTicketPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+/// One per SUPPORT conversation ("support:<userId>", so one per customer). A customer message on a
+/// RESOLVED or CLOSED ticket reopens it.
+model SupportTicket {
+  id                    String                @id @default(cuid())
+  conversationId        String                @unique
+  requesterId           String
+  assigneeId            String?
+  subject               String?
+  status                SupportTicketStatus   @default(OPEN)
+  priority              SupportTicketPriority @default(NORMAL)
+  firstResponseAt       DateTime?
+  lastCustomerMessageAt DateTime?
+  lastStaffMessageAt    DateTime?
+  resolvedAt            DateTime?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  requester    User         @relation("SupportTicketsRequested", fields: [requesterId], references: [id], onDelete: Cascade)
+  assignee     User?        @relation("SupportTicketsAssigned", fields: [assigneeId], references: [id], onDelete: SetNull)
+
+  @@index([status, priority, updatedAt])
+  @@index([assigneeId, status])
+  @@index([requesterId])
 }
 
 enum NotificationStatus {
@@ -850,6 +1020,9 @@ model Notification {
   /// e.g. "conversation:<id>". Reading the conversation clears them.
   groupKey   String?
   readAt     DateTime?
+  /// When the worker sent web push / the email digest for it (chat notifications only).
+  pushedAt   DateTime?
+  emailedAt  DateTime?
   createdAt  DateTime           @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -857,6 +1030,8 @@ model Notification {
   @@index([userId, status])
   @@index([userId, createdAt(sort: Desc)])
   @@index([userId, groupKey])
+  @@index([type, status, pushedAt])
+  @@index([type, status, emailedAt])
 }
 
 /// A user's choice per notification category (see NOTIFICATION_CATEGORIES); no row = the defaults.
@@ -865,10 +1040,85 @@ model NotificationPreference {
   category String
   inApp    Boolean
   email    Boolean
+  push     Boolean @default(true)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([userId, category])
+}
+
+/// A browser's Web Push subscription (VAPID). Deleted when the push service answers 404 or 410.
+model PushSubscription {
+  id         String    @id @default(cuid())
+  userId     String
+  endpoint   String    @unique
+  p256dh     String
+  auth       String
+  userAgent  String?
+  createdAt  DateTime  @default(now())
+  lastUsedAt DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Lesson Q&A: a searchable thread per lesson, separate from chat. Upvotes bubble the common
+/// questions up; the instructor (or a co-instructor) marks a question answered.
+model LessonQuestion {
+  id               String    @id @default(cuid())
+  lessonId         String
+  courseId         String
+  userId           String
+  title            String
+  body             String    @db.Text
+  upvotes          Int       @default(0)
+  answerCount      Int       @default(0)
+  answeredAt       DateTime?
+  acceptedAnswerId String?
+  pinned           Boolean   @default(false)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  lesson  Lesson               @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  course  Course               @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  user    User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  answers LessonAnswer[]
+  votes   LessonQuestionVote[]
+
+  @@index([lessonId, createdAt])
+  @@index([courseId, answeredAt])
+  @@index([userId])
+}
+
+model LessonAnswer {
+  id           String   @id @default(cuid())
+  questionId   String
+  userId       String
+  body         String   @db.Text
+  /// Written by the course's teacher or a co-instructor - shown with an "Instructor" badge.
+  isInstructor Boolean  @default(false)
+  /// The answer the instructor (or the asker) marked as the one that settled it.
+  accepted     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  question LessonQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([questionId, createdAt])
+}
+
+model LessonQuestionVote {
+  id         String   @id @default(cuid())
+  questionId String
+  userId     String
+  createdAt  DateTime @default(now())
+
+  question LessonQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  user     User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([questionId, userId])
 }
 
 /** Single-row table (id is always "singleton") for platform-wide toggles admins control at runtime. */
