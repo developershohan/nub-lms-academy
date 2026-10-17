@@ -35,6 +35,11 @@ const cspDirectives = [
 const nextConfig: NextConfig = {
   poweredByHeader: false,
   productionBrowserSourceMaps: false,
+  // Certificate PDFs read their embedded Unicode fonts from disk at request time (see
+  // src/lib/certificate-pdf.ts) - make sure serverless/standalone traces ship them.
+  outputFileTracingIncludes: {
+    "/api/v1/certificates/*/download": ["./src/assets/fonts/*.ttf"],
+  },
   async headers() {
     return [
       {
