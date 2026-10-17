@@ -29,7 +29,7 @@ export const getCourseLanding = cache(async (slug: string) => {
           },
         },
       },
-      _count: { select: { quizzes: { where: { questions: { some: {} } } } } },
+      _count: { select: { quizzes: { where: { archivedAt: null, questions: { some: {} } } } } },
     },
   });
   if (!course) return null;

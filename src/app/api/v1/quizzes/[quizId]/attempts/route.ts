@@ -28,7 +28,15 @@ export async function POST(_request: Request, { params }: { params: Promise<{ qu
 const submitSchema = z.object({
   attemptId: z.string().min(1),
   answers: z
-    .array(z.object({ questionId: z.string().min(1), selectedOptionIds: z.array(z.string()).max(20) }))
+    .array(
+      z.object({
+        questionId: z.string().min(1),
+        // Choice ids, or for ordering questions the ids in the student's order.
+        selectedOptionIds: z.array(z.string()).max(20).default([]),
+        // Fill-in-the-blank questions.
+        textAnswer: z.string().max(500).optional(),
+      })
+    )
     .max(200),
 });
 
@@ -41,6 +49,7 @@ export async function PATCH(request: Request) {
 
   const formData = new FormData();
   for (const answer of parsed.data.answers) {
+    if (answer.textAnswer !== undefined) formData.append(`q_${answer.questionId}`, answer.textAnswer);
     for (const optionId of answer.selectedOptionIds) {
       formData.append(`q_${answer.questionId}`, optionId);
     }

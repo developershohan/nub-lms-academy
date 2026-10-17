@@ -32,8 +32,14 @@ type Quiz = {
   passingScore: number;
   maxAttempts: number | null;
   timeLimitSec: number | null;
+  drawCount: number | null;
+  retakeCooldownMin: number | null;
+  shuffleQuestions: boolean;
+  shuffleOptions: boolean;
+  partialCredit: boolean;
   updatedAt: Date;
   questions: Question[];
+  _count: { attempts: number };
 };
 
 const initialState: ActionState = {};
@@ -41,7 +47,32 @@ const TYPE_ITEMS: Record<QuestionType, string> = {
   SINGLE_CHOICE: "Single choice",
   MULTIPLE_CHOICE: "Multiple choice",
   TRUE_FALSE: "True / False",
+  FILL_BLANK: "Fill in the blank",
+  ORDERING: "Ordering",
 };
+
+const OPTION_HELP: Record<Exclude<QuestionType, "TRUE_FALSE">, { label: string; placeholder: string }> = {
+  SINGLE_CHOICE: { label: "Options, one per line - start the correct one with *", placeholder: "*Paris\nLondon\nBerlin" },
+  MULTIPLE_CHOICE: {
+    label: "Options, one per line - start every correct one with *",
+    placeholder: "*HTML\n*CSS\nPhotoshop\n*JavaScript",
+  },
+  FILL_BLANK: {
+    label: "Accepted answers, one per line - matched ignoring case and extra spaces",
+    placeholder: "useEffect\nuse effect",
+  },
+  ORDERING: {
+    label: "Items in the correct order, one per line - students see them shuffled",
+    placeholder: "Install dependencies\nWrite the code\nRun the tests\nDeploy",
+  },
+};
+
+/** Asks before a destructive form submits - the action never runs if the teacher cancels. */
+function confirmSubmit(message: string) {
+  return (event: React.FormEvent) => {
+    if (!window.confirm(message)) event.preventDefault();
+  };
+}
 
 function SubmitButton({ label, pendingLabel }: { label: string; pendingLabel: string }) {
   const { pending } = useFormStatus();
@@ -54,7 +85,9 @@ function SubmitButton({ label, pendingLabel }: { label: string; pendingLabel: st
 
 function optionsToText(question?: Question) {
   if (!question || question.type === "TRUE_FALSE") return "";
-  return question.options.map((o) => (o.isCorrect ? `*${o.content}` : o.content)).join("\n");
+  // Blanks and ordering items are all "correct"; only choice questions mark their answers with *.
+  const starCorrect = question.type === "SINGLE_CHOICE" || question.type === "MULTIPLE_CHOICE";
+  return question.options.map((o) => (starCorrect && o.isCorrect ? `*${o.content}` : o.content)).join("\n");
 }
 
 function QuestionFields({ question }: { question?: Question }) {
@@ -107,8 +140,13 @@ function QuestionFields({ question }: { question?: Question }) {
         </div>
       ) : (
         <div className="space-y-1.5">
-          <Label>Options (one per line, prefix the correct one(s) with *)</Label>
-          <Textarea name="options" defaultValue={optionsToText(question)} rows={4} placeholder={"*Paris\nLondon\nBerlin"} />
+          <Label>{OPTION_HELP[type].label}</Label>
+          <Textarea
+            name="options"
+            defaultValue={question?.type === type ? optionsToText(question) : ""}
+            rows={4}
+            placeholder={OPTION_HELP[type].placeholder}
+          />
         </div>
       )}
     </>
@@ -153,7 +191,7 @@ function QuestionRow({ question }: { question: Question }) {
         <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(true)}>
           Edit
         </Button>
-        <form action={deleteAction}>
+        <form action={deleteAction} onSubmit={confirmSubmit("Delete this question? Past attempts keep their copy of it.")}>
           <input type="hidden" name="questionId" value={question.id} />
           <Button type="submit" size="sm" variant="ghost">
             Delete
@@ -211,9 +249,39 @@ function QuizSettingsForm({ quiz }: { quiz: Quiz }) {
         <Input name="maxAttempts" type="number" min={1} defaultValue={quiz.maxAttempts ?? ""} />
       </div>
       <div className="space-y-1.5">
-        <Label>Time limit in seconds (blank = none)</Label>
-        <Input name="timeLimitSec" type="number" min={1} defaultValue={quiz.timeLimitSec || ""} />
+        <Label>Time limit in minutes (blank = none)</Label>
+        <Input
+          name="timeLimitMin"
+          type="number"
+          min={1}
+          step="any"
+          defaultValue={quiz.timeLimitSec ? Math.round((quiz.timeLimitSec / 60) * 100) / 100 : ""}
+        />
       </div>
+      <div className="space-y-1.5">
+        <Label>Wait between attempts, minutes (blank = none)</Label>
+        <Input name="retakeCooldownMin" type="number" min={1} defaultValue={quiz.retakeCooldownMin ?? ""} />
+      </div>
+      <div className="space-y-1.5">
+        <Label>Questions per attempt (blank = all {quiz.questions.length})</Label>
+        <Input name="drawCount" type="number" min={1} defaultValue={quiz.drawCount ?? ""} />
+        <p className="text-xs text-muted-foreground">Fewer than the total draws a random set each attempt.</p>
+      </div>
+      <fieldset className="space-y-2 sm:col-span-2">
+        <legend className="mb-1 text-sm font-medium">Options</legend>
+        {(
+          [
+            ["shuffleQuestions", "Shuffle the question order for each attempt", quiz.shuffleQuestions],
+            ["shuffleOptions", "Shuffle answer options (True/False stays in order)", quiz.shuffleOptions],
+            ["partialCredit", "Partial credit on multiple-choice and ordering questions", quiz.partialCredit],
+          ] as const
+        ).map(([name, label, checked]) => (
+          <label key={name} className="flex items-center gap-2 text-sm">
+            <input type="checkbox" name={name} defaultChecked={checked} className="size-4 accent-primary" />
+            {label}
+          </label>
+        ))}
+      </fieldset>
       <div className="flex items-end sm:col-span-2">
         {state.error && <p className="mr-auto text-sm text-destructive">{state.error}</p>}
         <SubmitButton label="Save quiz settings" pendingLabel="Saving..." />
@@ -224,13 +292,27 @@ function QuizSettingsForm({ quiz }: { quiz: Quiz }) {
 
 function QuizCard({ quiz }: { quiz: Quiz }) {
   const [deleteState, deleteAction] = useActionState(deleteQuizAction, initialState);
-  useActionSuccess(deleteState, initialState, () => toast.success("Quiz deleted"));
+  const taken = quiz._count.attempts;
+  useActionSuccess(deleteState, initialState, () => toast.success(taken > 0 ? "Quiz removed from the course" : "Quiz deleted"));
 
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between space-y-0">
-        <CardTitle className="text-base">{quiz.title}</CardTitle>
-        <form action={deleteAction}>
+        <div className="space-y-0.5">
+          <CardTitle className="text-base">{quiz.title}</CardTitle>
+          <p className="text-xs text-muted-foreground">
+            {quiz.questions.length} {quiz.questions.length === 1 ? "question" : "questions"} ·{" "}
+            {taken} {taken === 1 ? "attempt" : "attempts"} by students
+          </p>
+        </div>
+        <form
+          action={deleteAction}
+          onSubmit={confirmSubmit(
+            taken > 0
+              ? "Remove this quiz from the course? Students' past attempts and scores are kept."
+              : "Delete this quiz and its questions?"
+          )}
+        >
           <input type="hidden" name="quizId" value={quiz.id} />
           <Button type="submit" size="sm" variant="ghost">
             Delete quiz

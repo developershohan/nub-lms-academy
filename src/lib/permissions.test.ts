@@ -74,11 +74,11 @@ describe("canGenerateCertificate", () => {
     prisma.enrollment.findUnique.mockResolvedValue({ status: "ACTIVE", completedAt: new Date() });
   });
 
-  it("only counts quizzes that have questions, so an empty quiz can't block the certificate", async () => {
+  it("only counts live quizzes that have questions, so an empty or removed quiz can't block the certificate", async () => {
     prisma.quiz.findMany.mockResolvedValue([]);
     await expect(canGenerateCertificate("student-1", "course-1")).resolves.toBe(true);
     expect(prisma.quiz.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { courseId: "course-1", questions: { some: {} } } })
+      expect.objectContaining({ where: { courseId: "course-1", archivedAt: null, questions: { some: {} } } })
     );
   });
 

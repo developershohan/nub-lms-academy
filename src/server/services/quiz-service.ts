@@ -20,9 +20,12 @@ export async function listQuizzesForEdit(userId: string, courseId: string) {
   if (!(await canManageCourse(userId, courseId))) return null;
 
   return prisma.quiz.findMany({
-    where: { courseId },
+    where: { courseId, archivedAt: null },
     orderBy: { sortOrder: "asc" },
-    include: { questions: { orderBy: { sortOrder: "asc" }, include: { options: { orderBy: { sortOrder: "asc" } } } } },
+    include: {
+      questions: { orderBy: { sortOrder: "asc" }, include: { options: { orderBy: { sortOrder: "asc" } } } },
+      _count: { select: { attempts: { where: { status: "SUBMITTED" } } } },
+    },
   });
 }
 
@@ -30,7 +33,10 @@ export async function createQuiz(courseId: string, userId: string, title: string
   if (!(await canManageCourse(userId, courseId))) return { error: "Forbidden" } as const;
 
   const last = await prisma.quiz.findFirst({ where: { courseId }, orderBy: { sortOrder: "desc" } });
-  const quiz = await prisma.quiz.create({ data: { courseId, title, sortOrder: (last?.sortOrder ?? -1) + 1 } });
+  // New quizzes give partial credit; quizzes from before it existed keep all-or-nothing grading.
+  const quiz = await prisma.quiz.create({
+    data: { courseId, title, sortOrder: (last?.sortOrder ?? -1) + 1, partialCredit: true },
+  });
   revalidateQuizPaths(courseId);
   return { ok: true, quiz } as const;
 }
@@ -46,20 +52,33 @@ export async function updateQuizSettings(quizId: string, userId: string, data: Q
       description: data.description || null,
       passingScore: data.passingScore,
       maxAttempts: data.maxAttempts ?? null,
+      // Open attempts keep the deadline they started with (QuizAttempt.deadlineAt).
       timeLimitSec: data.timeLimitSec ?? null,
+      drawCount: data.drawCount ?? null,
+      retakeCooldownMin: data.retakeCooldownMin ?? null,
+      shuffleQuestions: !!data.shuffleQuestions,
+      shuffleOptions: !!data.shuffleOptions,
+      partialCredit: !!data.partialCredit,
     },
   });
   revalidateQuizPaths(courseId);
   return { ok: true } as const;
 }
 
+/** A quiz students have taken is archived rather than deleted: it leaves the course (and stops
+ * counting toward certificates) but their attempts and scores stay on record. */
 export async function deleteQuiz(quizId: string, userId: string) {
   const courseId = await getCourseIdForQuiz(quizId);
   if (!courseId || !(await canManageCourse(userId, courseId))) return { error: "Forbidden" } as const;
 
-  await prisma.quiz.delete({ where: { id: quizId } });
+  const attempts = await prisma.quizAttempt.count({ where: { quizId } });
+  if (attempts > 0) {
+    await prisma.quiz.update({ where: { id: quizId }, data: { archivedAt: new Date() } });
+  } else {
+    await prisma.quiz.delete({ where: { id: quizId } });
+  }
   revalidateQuizPaths(courseId);
-  return { ok: true } as const;
+  return { ok: true, archived: attempts > 0 } as const;
 }
 
 function buildOptionRows(data: QuestionInput) {
@@ -69,17 +88,22 @@ function buildOptionRows(data: QuestionInput) {
       { content: "False", isCorrect: data.trueFalseAnswer === "false", sortOrder: 1 },
     ];
   }
+  // Blanks list accepted answers and ordering lists items in the right order: every line counts.
+  const allCorrect = data.type === "FILL_BLANK" || data.type === "ORDERING";
   return (data.options ?? "")
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
     .map((line, index) => {
-      const isCorrect = line.startsWith("*");
-      return { content: isCorrect ? line.slice(1).trim() : line, isCorrect, sortOrder: index };
-    });
+      const starred = line.startsWith("*");
+      return { content: starred ? line.slice(1).trim() : line, isCorrect: allCorrect || starred, sortOrder: index };
+    })
+    .filter((o) => o.content !== "");
 }
 
 function validateOptions(data: QuestionInput, options: ReturnType<typeof buildOptionRows>) {
+  if (data.type === "FILL_BLANK") return options.length > 0 ? null : "Add at least one accepted answer";
+  if (data.type === "ORDERING") return options.length >= 2 ? null : "Add at least two items to put in order";
   if (options.length < 2) return "Add at least two options";
   if (!options.some((o) => o.isCorrect)) return "Mark at least one option as correct";
   if (data.type === "SINGLE_CHOICE" && options.filter((o) => o.isCorrect).length !== 1) {
@@ -139,6 +163,8 @@ export async function updateQuestion(questionId: string, userId: string, data: Q
   return { ok: true } as const;
 }
 
+/** Past attempts keep their own copy of the question (QuizAttempt.snapshot), so deleting it here
+ * never touches anyone's results. */
 export async function deleteQuestion(questionId: string, userId: string) {
   const courseId = await getCourseIdForQuestion(questionId);
   if (!courseId || !(await canManageCourse(userId, courseId))) return { error: "Forbidden" } as const;

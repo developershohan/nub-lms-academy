@@ -453,6 +453,10 @@ enum QuestionType {
   SINGLE_CHOICE
   MULTIPLE_CHOICE
   TRUE_FALSE
+  /// Options are the accepted answers (never shown); a typed answer matches ignoring case and spacing.
+  FILL_BLANK
+  /// Options in their correct order (sortOrder); students see them shuffled and put them back in order.
+  ORDERING
 }
 
 enum QuizAttemptStatus {
@@ -461,17 +465,27 @@ enum QuizAttemptStatus {
 }
 
 model Quiz {
-  id           String   @id @default(cuid())
-  courseId     String
-  lessonId     String?  @unique
-  title        String
-  description  String?  @db.Text
-  passingScore Int      @default(70)
-  maxAttempts  Int?
-  timeLimitSec Int?
-  sortOrder    Int      @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                String    @id @default(cuid())
+  courseId          String
+  lessonId          String?   @unique
+  title             String
+  description       String?   @db.Text
+  passingScore      Int       @default(70)
+  maxAttempts       Int?
+  timeLimitSec      Int?
+  sortOrder         Int       @default(0)
+  shuffleQuestions  Boolean   @default(false)
+  shuffleOptions    Boolean   @default(false)
+  /// Question bank: each attempt draws this many questions at random. Null = every question.
+  drawCount         Int?
+  /// Multiple-choice and ordering questions earn a share of their points for partly right answers.
+  partialCredit     Boolean   @default(false)
+  /// Minutes a student waits after submitting before they can start another attempt.
+  retakeCooldownMin Int?
+  /// Set instead of deleting a quiz students have already taken, so their attempt history survives.
+  archivedAt        DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
   course    Course        @relation(fields: [courseId], references: [id], onDelete: Cascade)
   lesson    Lesson?       @relation(fields: [lessonId], references: [id], onDelete: SetNull)
@@ -491,7 +505,6 @@ model Question {
 
   quiz    Quiz             @relation(fields: [quizId], references: [id], onDelete: Cascade)
   options QuestionOption[]
-  answers QuizAnswer[]
 
   @@index([quizId])
 }
@@ -509,14 +522,24 @@ model QuestionOption {
 }
 
 model QuizAttempt {
-  id          String            @id @default(cuid())
-  quizId      String
-  userId      String
-  status      QuizAttemptStatus @default(IN_PROGRESS)
-  score       Int?
-  passed      Boolean?
-  startedAt   DateTime          @default(now())
-  submittedAt DateTime?
+  id             String            @id @default(cuid())
+  quizId         String
+  userId         String
+  status         QuizAttemptStatus @default(IN_PROGRESS)
+  score          Int?
+  passed         Boolean?
+  startedAt      DateTime          @default(now())
+  submittedAt    DateTime?
+  /// When answers stop being accepted (plus a short grace for the last request in flight). Fixed
+  /// at start, so changing the quiz's time limit never moves an open attempt's deadline.
+  deadlineAt     DateTime?
+  /// The questions as this attempt was given them - drawn, shuffled, with the answer key - so
+  /// later quiz edits never change how it was graded or what its history shows. See lib/quiz-grading.ts.
+  snapshot       Json?
+  /// Graded by the server from saved answers because time ran out before the student submitted.
+  autoSubmitted  Boolean           @default(false)
+  pointsEarned   Float?
+  pointsPossible Float?
 
   quiz    Quiz         @relation(fields: [quizId], references: [id], onDelete: Cascade)
   user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -525,15 +548,20 @@ model QuizAttempt {
   @@index([quizId, userId])
 }
 
+/// One answer in an attempt. questionId points into the attempt's snapshot rather than a live
+/// Question row, so deleting or editing a question never deletes or rewrites past answers.
 model QuizAnswer {
   id                String   @id @default(cuid())
   attemptId         String
   questionId        String
+  /// Chosen option ids - or, for ORDERING, the option ids in the order the student put them.
   selectedOptionIds String[]
+  /// FILL_BLANK only.
+  textAnswer        String?
   isCorrect         Boolean  @default(false)
+  pointsAwarded     Float    @default(0)
 
-  attempt  QuizAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-  question Question    @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  attempt QuizAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
 
   @@unique([attemptId, questionId])
 }
