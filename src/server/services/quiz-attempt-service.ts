@@ -107,13 +107,19 @@ export async function submitQuizAttempt(userId: string, attemptId: string, formD
   const score = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
   const passed = score >= attempt.quiz.passingScore;
 
-  await prisma.$transaction([
-    prisma.quizAnswer.createMany({ data: answerRows.map((a) => ({ ...a, attemptId })) }),
-    prisma.quizAttempt.update({
-      where: { id: attemptId },
+  // The IN_PROGRESS -> SUBMITTED flip is the guard, so it's a conditional update inside the
+  // transaction: a double-click or retried request used to pass the status check above twice, and
+  // the second insert then hit QuizAnswer's (attemptId, questionId) unique constraint as a 500.
+  const claimed = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.quizAttempt.updateMany({
+      where: { id: attemptId, status: "IN_PROGRESS" },
       data: { status: "SUBMITTED", score, passed, submittedAt: new Date() },
-    }),
-  ]);
+    });
+    if (count === 0) return false;
+    await tx.quizAnswer.createMany({ data: answerRows.map((a) => ({ ...a, attemptId })) });
+    return true;
+  });
+  if (!claimed) return { error: "This attempt was already submitted" } as const;
 
   revalidatePath(`/student/quiz/${attempt.quizId}`);
   return { ok: true, score, passed } as const;

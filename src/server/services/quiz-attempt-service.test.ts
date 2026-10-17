@@ -47,15 +47,18 @@ describe("submitQuizAttempt", () => {
     });
   });
 
+  const openAttempt = {
+    id: "attempt-1",
+    userId: "student-1",
+    quizId: "quiz-1",
+    status: "IN_PROGRESS",
+    startedAt: minutesAgo(5),
+    quiz,
+  };
+
   it("grades an on-time submission", async () => {
-    prisma.quizAttempt.findUnique.mockResolvedValue({
-      id: "attempt-1",
-      userId: "student-1",
-      quizId: "quiz-1",
-      status: "IN_PROGRESS",
-      startedAt: minutesAgo(5),
-      quiz,
-    });
+    prisma.quizAttempt.findUnique.mockResolvedValue(openAttempt);
+    prisma.quizAttempt.updateMany.mockResolvedValue({ count: 1 });
     const answers = new FormData();
     answers.append("q_q1", "a");
 
@@ -64,6 +67,23 @@ describe("submitQuizAttempt", () => {
       score: 100,
       passed: true,
     });
+    expect(prisma.quizAnswer.createMany).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a concurrent duplicate submit cleanly instead of failing on the unique constraint", async () => {
+    // Both requests read IN_PROGRESS; the first one's transaction already flipped it.
+    prisma.quizAttempt.findUnique.mockResolvedValue(openAttempt);
+    prisma.quizAttempt.updateMany.mockResolvedValue({ count: 0 });
+    const answers = new FormData();
+    answers.append("q_q1", "a");
+
+    await expect(submitQuizAttempt("student-1", "attempt-1", answers)).resolves.toEqual({
+      error: "This attempt was already submitted",
+    });
+    expect(prisma.quizAttempt.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "attempt-1", status: "IN_PROGRESS" } })
+    );
+    expect(prisma.quizAnswer.createMany).not.toHaveBeenCalled();
   });
 });
 
