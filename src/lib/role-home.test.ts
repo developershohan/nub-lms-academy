@@ -1,5 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { getRoleHome, resolveLoginDestination } from "./role-home";
+import { getDashboardKey, getRoleDashboards, getRoleHome, isUnder, resolveLoginDestination } from "./role-home";
+
+describe("getRoleDashboards", () => {
+  const labels = (roles: Parameters<typeof getRoleDashboards>[0]) => getRoleDashboards(roles).map((d) => d.label);
+
+  it("offers one dashboard per role, student first", () => {
+    expect(labels(["STUDENT"])).toEqual(["Student"]);
+    expect(labels(["TEACHER", "STUDENT"])).toEqual(["Student", "Teacher"]);
+    expect(labels(["STUDENT", "TEACHER", "ADMIN"])).toEqual(["Student", "Teacher", "Admin"]);
+  });
+
+  it("follows the layout gates for super admins and support staff", () => {
+    expect(labels(["SUPER_ADMIN"])).toEqual(["Teacher", "Admin"]);
+    expect(getRoleDashboards(["STUDENT", "SUPPORT"])).toEqual([
+      { key: "student", label: "Student", href: "/student/dashboard" },
+      { key: "admin", label: "Support", href: "/admin/messages" },
+    ]);
+    // An admin who is also support staff gets the full admin dashboard, once.
+    expect(labels(["ADMIN", "SUPPORT"])).toEqual(["Admin"]);
+  });
+});
+
+describe("getDashboardKey", () => {
+  it("maps a path to its dashboard area", () => {
+    expect(getDashboardKey("/student/course/abc/learn")).toBe("student");
+    expect(getDashboardKey("/teacher/courses/abc/edit")).toBe("teacher");
+    expect(getDashboardKey("/admin/messages")).toBe("admin");
+  });
+
+  it("ignores public pages, including the teacher application pitch", () => {
+    expect(getDashboardKey("/teacher/apply")).toBeNull();
+    expect(getDashboardKey("/courses/teacher-tips")).toBeNull();
+    expect(getDashboardKey("/students")).toBeNull();
+  });
+});
+
+describe("isUnder", () => {
+  it("matches the page and its sub-pages on whole segments", () => {
+    expect(isUnder("/student/certificates", "/student/certificates")).toBe(true);
+    expect(isUnder("/student/certificates/abc", "/student/certificates")).toBe(true);
+    expect(isUnder("/admin/courses-archive", "/admin/courses")).toBe(false);
+    expect(isUnder("/student/dashboard", "/student/my-courses")).toBe(false);
+  });
+});
 
 describe("getRoleHome", () => {
   it("ranks admin above teacher above student for multi-role users", () => {

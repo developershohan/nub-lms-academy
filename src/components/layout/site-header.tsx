@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getCurrentUser } from "@/lib/permissions";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { UserMenu } from "@/components/layout/user-menu";
+import { MobileSiteNav, SiteNavLinks, type SiteNavLink } from "@/components/layout/site-nav";
 import { Button } from "@/components/ui/button";
 import { getRoleHome } from "@/lib/role-home";
 
@@ -9,32 +10,32 @@ export async function SiteHeader() {
   // DB-verified roles, not the JWT's cached claim - so a just-approved teacher's header link
   // points at /teacher/dashboard immediately instead of only after they log back in.
   const user = await getCurrentUser();
-  const dashboardHref = user ? getRoleHome(user.roles) : "/student/dashboard";
+  const links: SiteNavLink[] = [
+    { href: "/courses", label: "Courses" },
+    { href: "/categories", label: "Categories" },
+    { href: "/pricing", label: "Pricing" },
+    { href: "/about", label: "About" },
+    ...(!user?.roles.includes("TEACHER") ? [{ href: "/teacher/apply", label: "Become a teacher" }] : []),
+  ];
 
   return (
     <header className="border-b">
-      <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-        <Link href="/" className="font-heading text-[15px] font-semibold tracking-tight">
+      <div className="mx-auto flex h-14 max-w-6xl items-center gap-2 px-4">
+        <MobileSiteNav links={links} dashboardHref={user ? getRoleHome(user.roles) : null} />
+        <Link
+          href="/"
+          className="mr-2 rounded-sm font-heading text-[15px] font-semibold tracking-tight whitespace-nowrap md:mr-4 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
           NUB Academy
         </Link>
-        <nav className="hidden gap-6 text-sm text-muted-foreground sm:flex">
-          <Link href="/courses" className="transition-colors hover:text-foreground">Courses</Link>
-          <Link href="/categories" className="transition-colors hover:text-foreground">Categories</Link>
-          <Link href="/pricing" className="transition-colors hover:text-foreground">Pricing</Link>
-          <Link href="/about" className="transition-colors hover:text-foreground">About</Link>
-          {!user?.roles.includes("TEACHER") && (
-            <Link href="/teacher/apply" className="transition-colors hover:text-foreground">
-              Become a teacher
-            </Link>
-          )}
-        </nav>
-        <div className="flex items-center gap-2">
+        <SiteNavLinks links={links} />
+        <div className="ml-auto flex items-center gap-1.5">
           <ThemeToggle />
           {user ? (
-            <UserMenu name={user.name} email={user.email} image={user.image} dashboardHref={dashboardHref} />
+            <UserMenu name={user.name} email={user.email} image={user.image} roles={user.roles} />
           ) : (
             <>
-              <Button variant="ghost" render={<Link href="/login" />}>
+              <Button variant="ghost" className="hidden min-[360px]:inline-flex" render={<Link href="/login" />}>
                 Log in
               </Button>
               <Button render={<Link href="/register" />}>Sign up</Button>

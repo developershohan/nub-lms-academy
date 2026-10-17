@@ -1,9 +1,12 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Award } from "lucide-react";
 import { getCurrentUser } from "@/lib/permissions";
 import { listCertificatesForStudent, listCertificateEligibleCourses } from "@/server/services/certificate-service";
+import { listStudentEnrollments } from "@/server/services/enrollment-service";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { GenerateCertificateButton } from "@/components/student/generate-certificate-button";
 
 export default async function StudentCertificatesPage() {
@@ -14,6 +17,9 @@ export default async function StudentCertificatesPage() {
     listCertificatesForStudent(user.id),
     listCertificateEligibleCourses(user.id),
   ]);
+  // Only needed to pick the empty state's next step: keep going, or find a first course.
+  const isEmpty = certificates.length === 0 && eligibleCourses.length === 0;
+  const hasEnrollments = isEmpty && (await listStudentEnrollments(user.id)).length > 0;
 
   return (
     <div className="space-y-6">
@@ -33,10 +39,22 @@ export default async function StudentCertificatesPage() {
         </div>
       )}
 
-      {certificates.length === 0 && eligibleCourses.length === 0 && (
-        <p className="text-muted-foreground">
-          Complete a course to earn your first certificate.
-        </p>
+      {isEmpty && (
+        <EmptyState
+          icon={Award}
+          title="No certificates yet"
+          description="Finish all the lessons and quizzes in a course to claim a certificate, with a verification link you can share with employers."
+        >
+          {hasEnrollments ? (
+            <Button size="lg" render={<Link href="/student/my-courses" />}>
+              Continue learning
+            </Button>
+          ) : (
+            <Button size="lg" render={<Link href="/courses" />}>
+              Browse courses
+            </Button>
+          )}
+        </EmptyState>
       )}
 
       {certificates.length > 0 && (

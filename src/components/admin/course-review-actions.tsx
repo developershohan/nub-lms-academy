@@ -68,7 +68,7 @@ export function CourseReviewActions({
 
   return (
     <div className="flex flex-col items-end gap-2">
-      <div className="flex gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
         {changedSinceReview && (
           <form action={reviewedAction}>
             <input type="hidden" name="courseId" value={courseId} />
@@ -118,7 +118,7 @@ export function CourseReviewActions({
         </form>
       </div>
       {showReject && (
-        <form action={rejectAction} className="flex w-64 flex-col items-end gap-2">
+        <form action={rejectAction} className="flex w-64 max-w-full flex-col items-end gap-2">
           <input type="hidden" name="courseId" value={courseId} />
           <Textarea name="reason" placeholder="Reason for rejection" required rows={2} />
           <ActionButton label="Confirm reject" pendingLabel="Rejecting..." variant="outline" />
