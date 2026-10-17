@@ -225,6 +225,14 @@ model Course {
   /// Set when the teacher edits an APPROVED or PUBLISHED course (details, price, lessons), so an
   /// admin re-reviews it; cleared by "Mark reviewed". The course stays live meanwhile.
   changedSinceReviewAt   DateTime?
+  /// Denormalised for catalogue search, sorting and filtering - recomputed by refreshCourseStats
+  /// (src/server/services/course-stats-service.ts) whenever reviews, lessons or prices change.
+  ratingAvg              Float        @default(0)
+  ratingCount            Int          @default(0)
+  totalDurationSec       Int          @default(0)
+  lessonCount            Int          @default(0)
+  /// salePrice ?? price - what checkout actually charges, so catalogue price sorts and filters are right.
+  effectivePrice         Decimal      @default(0) @db.Decimal(10, 2)
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
 
@@ -248,6 +256,8 @@ model Course {
 
   @@index([status])
   @@index([status, isFeatured])
+  @@index([status, ratingAvg])
+  @@index([status, effectivePrice])
   @@index([teacherId])
   @@index([categoryId])
 }

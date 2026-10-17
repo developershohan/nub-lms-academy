@@ -6,6 +6,7 @@ import { logAudit } from "@/lib/audit";
 import { slugify } from "@/lib/slug";
 import { recomputeCourseCompletion } from "@/server/services/progress-service";
 import { notifyAdmins } from "@/server/services/notification-service";
+import { refreshCourseStats } from "@/server/services/course-stats-service";
 import type { CourseDetailsInput, LessonInput } from "@/lib/validations/course";
 
 function linesToItems(text: string | undefined) {
@@ -228,6 +229,7 @@ export async function updateCourseDetails(courseId: string, userId: string, data
     return updated;
   });
 
+  await refreshCourseStats(courseId);
   await flagChangedSinceReview(courseId, userId, "course details", {
     previousPrice: before ? Number(before.price) : null,
     previousSalePrice: before?.salePrice != null ? Number(before.salePrice) : null,
@@ -387,6 +389,7 @@ export async function deleteSection(sectionId: string, userId: string) {
   await prisma.courseSection.delete({ where: { id: sectionId } });
   // Its lessons went with it, which may leave some students with every remaining lesson done.
   await recomputeCourseCompletion(courseId);
+  await refreshCourseStats(courseId);
   await flagChangedSinceReview(courseId, userId, "section removed", { sectionId });
   revalidatePath(`/teacher/courses/${courseId}/edit`);
   return { ok: true } as const;
@@ -421,6 +424,7 @@ export async function createLesson(sectionId: string, userId: string, data: Less
     },
   });
   await recomputeCourseCompletion(courseId);
+  await refreshCourseStats(courseId);
   await flagChangedSinceReview(courseId, userId, "lesson added", { lessonId: lesson.id, title: data.title });
   revalidatePath(`/teacher/courses/${courseId}/edit`);
   return { ok: true, lesson } as const;
@@ -453,6 +457,7 @@ export async function updateLesson(lessonId: string, userId: string, data: Lesso
     }
   });
 
+  await refreshCourseStats(courseId);
   await flagChangedSinceReview(courseId, userId, "lesson edited", {
     lessonId,
     title: data.title,
@@ -468,6 +473,7 @@ export async function deleteLesson(lessonId: string, userId: string) {
 
   await prisma.lesson.delete({ where: { id: lessonId } });
   await recomputeCourseCompletion(courseId);
+  await refreshCourseStats(courseId);
   await flagChangedSinceReview(courseId, userId, "lesson removed", { lessonId });
   revalidatePath(`/teacher/courses/${courseId}/edit`);
   return { ok: true } as const;

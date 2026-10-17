@@ -10,6 +10,7 @@ vi.mock("@/lib/permissions", () => ({
 vi.mock("@/lib/audit", () => ({ logAudit: vi.fn() }));
 vi.mock("@/server/services/progress-service", () => ({ recomputeCourseCompletion: vi.fn() }));
 vi.mock("@/server/services/notification-service", () => ({ notifyAdmins: vi.fn() }));
+vi.mock("@/server/services/course-stats-service", () => ({ refreshCourseStats: vi.fn() }));
 
 import { prisma as prismaClient } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";

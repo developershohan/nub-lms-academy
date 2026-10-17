@@ -36,6 +36,8 @@ export function SearchInput({
     clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
       const params = new URLSearchParams(searchParams);
+      // A new search starts from the first page of results.
+      params.delete("page");
       if (next.trim()) {
         params.set(paramKey, next.trim());
       } else {
