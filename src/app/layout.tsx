@@ -21,8 +21,11 @@ const bricolage = Bricolage_Grotesque({
 });
 
 export const metadata: Metadata = {
-  title: "NUB Academy LMS",
-  description: "Learning management platform",
+  // Resolves relative canonical/Open Graph URLs (pages pass paths like /courses/<slug>).
+  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"),
+  title: { default: "NUB Academy", template: "%s | NUB Academy" },
+  description: "Online courses from Northern University Bangladesh instructors - learn at your own pace and earn a certificate.",
+  openGraph: { siteName: "NUB Academy", type: "website" },
 };
 
 export default function RootLayout({

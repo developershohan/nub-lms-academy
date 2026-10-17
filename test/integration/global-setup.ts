@@ -37,6 +37,8 @@ export default async function setup(project: TestProject) {
     password: "postgres",
     port,
     persistent: false,
+    // initdb otherwise takes the OS locale - WIN1252 on Windows, which can't store Bengali text.
+    initdbFlags: ["--encoding=UTF8", "--locale=C"],
     onLog: () => {},
     onError: (message) => console.error("[embedded-postgres]", message),
   });
