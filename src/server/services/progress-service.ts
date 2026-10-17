@@ -3,15 +3,55 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { canAccessLesson } from "@/lib/permissions";
 
-async function maybeCompleteCourse(userId: string, courseId: string) {
-  const [totalLessons, completedLessons] = await Promise.all([
+/**
+ * Brings Enrollment.completedAt in line with the course's CURRENT lessons - for one student after
+ * their progress changes, or for every active enrollment after the curriculum changes. Completion
+ * used to be set only when a student marked a lesson done and never cleared, so deleting a
+ * course's last unfinished lesson never completed anyone and adding a lesson never un-completed
+ * anyone. A student who already holds a certificate keeps completedAt: that completion was certified.
+ */
+export async function recomputeCourseCompletion(courseId: string, userId?: string) {
+  const [totalLessons, enrollments] = await Promise.all([
     prisma.lesson.count({ where: { section: { courseId } } }),
-    prisma.lessonProgress.count({ where: { userId, completed: true, lesson: { section: { courseId } } } }),
+    prisma.enrollment.findMany({
+      where: { courseId, status: "ACTIVE", ...(userId ? { userId } : {}) },
+      select: { userId: true, completedAt: true },
+    }),
   ]);
-  if (totalLessons > 0 && totalLessons === completedLessons) {
+  if (enrollments.length === 0) return;
+  const userIds = enrollments.map((e) => e.userId);
+
+  const [progress, certificates] = await Promise.all([
+    prisma.lessonProgress.groupBy({
+      by: ["userId"],
+      where: { userId: { in: userIds }, completed: true, lesson: { section: { courseId } } },
+      _count: { _all: true },
+    }),
+    prisma.certificate.findMany({ where: { courseId, userId: { in: userIds } }, select: { userId: true } }),
+  ]);
+  const completedLessons = new Map(progress.map((p) => [p.userId, p._count._all]));
+  const certified = new Set(certificates.map((c) => c.userId));
+
+  const nowComplete: string[] = [];
+  const noLongerComplete: string[] = [];
+  for (const enrollment of enrollments) {
+    const complete = totalLessons > 0 && (completedLessons.get(enrollment.userId) ?? 0) >= totalLessons;
+    if (complete && !enrollment.completedAt) nowComplete.push(enrollment.userId);
+    if (!complete && enrollment.completedAt && !certified.has(enrollment.userId)) {
+      noLongerComplete.push(enrollment.userId);
+    }
+  }
+
+  if (nowComplete.length) {
     await prisma.enrollment.updateMany({
-      where: { userId, courseId, completedAt: null },
+      where: { courseId, userId: { in: nowComplete }, completedAt: null },
       data: { completedAt: new Date() },
+    });
+  }
+  if (noLongerComplete.length) {
+    await prisma.enrollment.updateMany({
+      where: { courseId, userId: { in: noLongerComplete } },
+      data: { completedAt: null },
     });
   }
 }
@@ -37,7 +77,8 @@ export async function recordLessonProgress(
     update: { watchedSeconds, completed, completedAt: completed ? new Date() : null },
   });
 
-  if (completed) await maybeCompleteCourse(userId, courseId);
+  // Only on completion: progress pings with completed=false must not un-complete a finished course.
+  if (completed) await recomputeCourseCompletion(courseId, userId);
 
   revalidatePath(`/student/course/${courseId}/learn`);
   revalidatePath("/student/dashboard");
