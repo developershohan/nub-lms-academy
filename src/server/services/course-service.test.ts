@@ -2,14 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaMock } from "../../../test/prisma-mock";
 
 vi.mock("@/lib/prisma", () => import("../../../test/prisma-mock").then((m) => m.prismaModule()));
-vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
 vi.mock("@/lib/permissions", () => ({
   canManageCourse: vi.fn().mockResolvedValue(true),
   canAdminAccess: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("@/lib/audit", () => ({ logAudit: vi.fn() }));
 vi.mock("@/server/services/progress-service", () => ({ recomputeCourseCompletion: vi.fn() }));
-vi.mock("@/server/services/notification-service", () => ({ notifyAdmins: vi.fn() }));
+vi.mock("@/server/services/notification-service", () => ({ notify: vi.fn(), notifyAdmins: vi.fn() }));
 vi.mock("@/server/services/course-stats-service", () => ({ refreshCourseStats: vi.fn() }));
 
 import { prisma as prismaClient } from "@/lib/prisma";

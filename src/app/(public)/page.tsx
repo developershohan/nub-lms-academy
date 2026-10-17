@@ -2,20 +2,19 @@ import Link from "next/link";
 import { ArrowRight, BadgeCheck, BookOpen, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { prisma } from "@/lib/prisma";
-import { listFeaturedCourses } from "@/server/services/course-service";
-import { listCategoriesWithCounts } from "@/server/services/category-service";
+import type { listFeaturedCourses } from "@/server/services/course-service";
+import {
+  getCachedCategories,
+  getCachedFeatured,
+  getCachedStats,
+  getCachedTrending,
+} from "@/server/services/home-cache";
 import { CourseCard } from "@/components/course/course-card";
+import { CourseRail, Eyebrow } from "@/components/home/home-sections";
+import { PersonalHome } from "@/components/home/personal-home";
 import { categoryStyle } from "@/lib/category-style";
 import { cn } from "@/lib/utils";
 import { getCurrentUser } from "@/lib/permissions";
-import { getRoleHome } from "@/lib/role-home";
-
-function Eyebrow({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="font-mono text-[11px] uppercase tracking-widest text-muted-foreground">{children}</p>
-  );
-}
 
 function SpotlightCard({
   course,
@@ -99,22 +98,25 @@ const steps = [
   },
 ];
 
+/** Signed-in learners get their own home (continue learning, recommendations); everyone else the
+ * marketing page. Both read the shared lists from the cross-request cache in home-cache.ts. */
 export default async function HomePage() {
-  const [user, featured, categories, courseCount, teacherCount] = await Promise.all([
-    getCurrentUser(),
-    listFeaturedCourses(7),
-    listCategoriesWithCounts(),
-    prisma.course.count({ where: { status: "PUBLISHED" } }),
-    prisma.course
-      .findMany({ where: { status: "PUBLISHED" }, distinct: ["teacherId"], select: { teacherId: true } })
-      .then((rows) => rows.length),
+  const user = await getCurrentUser();
+  if (user) return <PersonalHome user={user} />;
+
+  const [featured, categories, counts, trendingAll] = await Promise.all([
+    getCachedFeatured(),
+    getCachedCategories(),
+    getCachedStats(),
+    getCachedTrending(null),
   ]);
   const [spotlight, ...rail] = featured;
-  const primaryAccountHref = user ? getRoleHome(user.roles) : "/register";
+  const featuredIds = new Set(featured.map((c) => c.id));
+  const trending = trendingAll.filter((c) => !featuredIds.has(c.id)).slice(0, 4);
   const stats = [
-    { value: courseCount, label: "courses" },
+    { value: counts.courses, label: "courses" },
     { value: categories.filter((c) => c._count.courses > 0).length, label: "categories" },
-    { value: teacherCount, label: "instructors" },
+    { value: counts.teachers, label: "instructors" },
   ];
 
   return (
@@ -135,8 +137,8 @@ export default async function HomePage() {
               <Button render={<Link href="/courses" />} size="lg">
                 Browse courses
               </Button>
-              <Button render={<Link href={primaryAccountHref} />} variant="outline" size="lg">
-                {user ? "Go to dashboard" : "Start free"}
+              <Button render={<Link href="/register" />} variant="outline" size="lg">
+                Start free
               </Button>
             </div>
             <dl className="mt-10 flex gap-8">
@@ -206,6 +208,19 @@ export default async function HomePage() {
             })}
         </div>
       </section>
+
+      {/* Trending - what students are enrolling in this month */}
+      {trending.length > 0 && (
+        <div className="mx-auto max-w-6xl px-4 pb-16 sm:pb-24">
+          <CourseRail
+            id="trending-heading"
+            eyebrow="Trending this month"
+            title="What students are taking"
+            href="/courses?sort=popular"
+            courses={trending}
+          />
+        </div>
+      )}
 
       {/* Featured courses */}
       {rail.length > 0 && (

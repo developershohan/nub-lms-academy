@@ -1,32 +1,29 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
-import { MessagesSquare } from "lucide-react";
+import { MessagesSquare, PenSquare, X } from "lucide-react";
 import { useSocket } from "@/hooks/use-socket";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import type { ConversationSummary } from "@/server/services/chat-service";
+import type { TicketWire } from "@/server/chat/support";
 import {
-  startDirectConversationAction,
-  startCourseGroupConversationAction,
-  startSupportConversationAction,
+  getConversationSummaryAction,
   hideMessageAction,
+  pinMessageAction,
+  reportMessageAction,
+  startCourseGroupConversationAction,
+  startDirectConversationAction,
+  startSupportConversationAction,
 } from "@/components/chat/actions";
-import { StaffContactPanel } from "@/components/chat/staff-contact-panel";
-
-type ChatMessage = {
-  id: string;
-  conversationId: string;
-  senderId: string;
-  content: string;
-  createdAt: string;
-  deletedAt: string | null;
-  sender: { id: string; name: string | null };
-};
+import { ChatDetails } from "@/components/chat/chat-details";
+import { ConversationList } from "@/components/chat/conversation-list";
+import { MessageThread } from "@/components/chat/message-thread";
+import { NewConversationPanel } from "@/components/chat/new-conversation-panel";
+import { useChatThread } from "@/components/chat/use-chat-thread";
 
 export type ChatContact = {
   kind: "direct" | "course_group";
@@ -40,9 +37,64 @@ export type ChatContact = {
   dropdown?: boolean;
 };
 
+/** What conversation:updated carries. Every field is optional: a message brings the preview and
+ * counts, a read just the count, a block or mute just that. */
+type InboxUpdate = Partial<
+  Pick<ConversationSummary, "unread" | "lastSeq" | "lastMessageAt" | "blocked" | "canPost" | "postingBlockedReason" | "mutedUntil" | "ticket">
+> & { conversationId: string; preview?: string };
+
+const CHANNEL_ORDER = ["GENERAL", "ANNOUNCEMENTS", "QA", "BATCH"] as const;
+
+/**
+ * Most recent activity first, with each course's channels kept together (#general,
+ * #announcements, #q-and-a, then batches), placed by the course's latest message.
+ */
+function sortInbox(list: ConversationSummary[]) {
+  const group = (c: ConversationSummary) => (c.type === "COURSE_GROUP" && c.courseId ? `course:${c.courseId}` : c.id);
+  const latest = new Map<string, string>();
+  for (const c of list) {
+    const key = group(c);
+    const at = c.lastMessageAt ?? "";
+    if (!latest.has(key) || at > latest.get(key)!) latest.set(key, at);
+  }
+  return [...list].sort((a, b) => {
+    const [ga, gb] = [group(a), group(b)];
+    // Ties fall back to the group key, so a course's channels can't be split by another conversation.
+    if (ga !== gb) return latest.get(gb)!.localeCompare(latest.get(ga)!) || ga.localeCompare(gb);
+    return CHANNEL_ORDER.indexOf(a.channel ?? "GENERAL") - CHANNEL_ORDER.indexOf(b.channel ?? "GENERAL") || a.label.localeCompare(b.label);
+  });
+}
+
+const TYPE_LABEL: Record<ConversationSummary["type"], string> = {
+  DIRECT: "Direct message",
+  COURSE_GROUP: "Course channel",
+  SUPPORT: "Support",
+};
+const TICKET_STATUS = { OPEN: "Open", PENDING: "Waiting on you", RESOLVED: "Resolved", CLOSED: "Closed" } as const;
+
+const wideQuery = "(min-width: 1280px)";
+function useIsWide() {
+  return useSyncExternalStore(
+    (onChange) => {
+      const mq = window.matchMedia(wideQuery);
+      mq.addEventListener("change", onChange);
+      return () => mq.removeEventListener("change", onChange);
+    },
+    () => window.matchMedia(wideQuery).matches,
+    () => true
+  );
+}
+
+/**
+ * The inbox: conversations on the left (newest activity first, with unread counts that update
+ * live), the open conversation in the middle, details on the right. On phones it is one at a
+ * time. `?c=<id>` (what notification links carry) opens a conversation directly. A course's
+ * channels (#general, #announcements, #q-and-a, batches) show as tabs above its thread.
+ */
 export function ChatShell({
   currentUser,
   initialConversations,
+  initialSelectedId = null,
   contacts = [],
   showContactSupport = false,
   isModerator = false,
@@ -51,8 +103,10 @@ export function ChatShell({
 }: {
   currentUser: { id: string; name: string | null };
   initialConversations: ConversationSummary[];
+  initialSelectedId?: string | null;
   contacts?: ChatContact[];
   showContactSupport?: boolean;
+  /** Staff: may read any conversation and remove messages anywhere. */
   isModerator?: boolean;
   /** Admin/support "chat with anyone" - a live user search instead of a fixed contact list. */
   allowStaffSearch?: boolean;
@@ -60,368 +114,318 @@ export function ChatShell({
   emptyState?: React.ReactNode;
 }) {
   const { socket, connected, error: socketError } = useSocket();
-  const [conversations, setConversations] = useState(initialConversations);
-  const [selectedId, setSelectedId] = useState<string | null>(initialConversations[0]?.id ?? null);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [loadingMessages, setLoadingMessages] = useState(false);
-  const [hasEarlier, setHasEarlier] = useState(false);
-  const [loadingEarlier, setLoadingEarlier] = useState(false);
-  const [typingLabel, setTypingLabel] = useState<string | null>(null);
-  const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
-  const [seenByOther, setSeenByOther] = useState(false);
-  const [draft, setDraft] = useState("");
-  const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const prependedEarlier = useRef(false);
+  const [conversations, setConversations] = useState(() => sortInbox(initialConversations));
+  const [selectedId, setSelectedId] = useState<string | null>(
+    initialSelectedId && initialConversations.some((c) => c.id === initialSelectedId) ? initialSelectedId : null
+  );
+  const [query, setQuery] = useState("");
+  const [composing, setComposing] = useState(initialConversations.length === 0 && contacts.length > 0);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [online, setOnline] = useState<Set<string>>(new Set());
+  const isWide = useIsWide();
 
+  const thread = useChatThread({ conversationId: selectedId, socket, connected, currentUser });
+
+  // A server re-render (new conversation elsewhere) brings fresh summaries: merge them in.
+  useEffect(() => {
+    queueMicrotask(() =>
+      setConversations((current) => {
+        const known = new Map(current.map((c) => [c.id, c]));
+        return sortInbox(initialConversations.map((c) => ({ ...c, unread: known.has(c.id) ? known.get(c.id)!.unread : c.unread })));
+      })
+    );
+  }, [initialConversations]);
+
+  /** A conversation this inbox doesn't list yet (a DM someone just started, a new channel). */
+  const addConversation = useCallback(async (conversationId: string) => {
+    const result = await getConversationSummaryAction(conversationId);
+    if ("error" in result) return;
+    const summary = result.conversation;
+    setConversations((current) => (current.some((c) => c.id === summary.id) ? current : sortInbox([summary, ...current])));
+  }, []);
+
+  // A notification link to a conversation this user isn't a member of (staff opening a ticket).
+  useEffect(() => {
+    if (!initialSelectedId || initialConversations.some((c) => c.id === initialSelectedId)) return;
+    void getConversationSummaryAction(initialSelectedId).then((result) => {
+      if ("error" in result) return;
+      setConversations((current) => (current.some((c) => c.id === result.conversation.id) ? current : [result.conversation, ...current]));
+      setSelectedId(result.conversation.id);
+    });
+  }, [initialSelectedId, initialConversations]);
+
+  // Live inbox: every member's room gets conversation:updated with their own unread count.
   useEffect(() => {
     if (!socket) return;
-
-    const onOnline = ({ userId }: { userId: string }) =>
-      setOnlineUsers((prev) => new Set(prev).add(userId));
+    const onUpdate = (update: InboxUpdate) => {
+      let unknown = false;
+      setConversations((current) => {
+        if (!current.some((c) => c.id === update.conversationId)) {
+          unknown = !!update.lastSeq;
+          return current;
+        }
+        return sortInbox(
+          current.map((c) => {
+            if (c.id !== update.conversationId) return c;
+            const { conversationId: _id, preview, unread, ...rest } = update;
+            void _id;
+            return {
+              ...c,
+              ...rest,
+              // The open conversation is being read as it arrives.
+              ...(unread !== undefined ? { unread: c.id === selectedId && document.visibilityState === "visible" ? 0 : unread } : {}),
+              ...(preview !== undefined ? { lastMessage: preview } : {}),
+            };
+          })
+        );
+      });
+      // Someone started a conversation with this user: fetch it and list it.
+      if (unknown) void addConversation(update.conversationId);
+    };
+    const onRemoved = ({ conversationId }: { conversationId: string }) => {
+      setConversations((current) => {
+        const gone = current.find((c) => c.id === conversationId);
+        if (gone) toast.info(`You no longer have access to ${gone.label}.`);
+        return current.filter((c) => c.id !== conversationId);
+      });
+      setSelectedId((id) => (id === conversationId ? null : id));
+    };
+    const onAdded = ({ conversationId }: { conversationId: string }) => void addConversation(conversationId);
+    const onTicket = (ticket: TicketWire) =>
+      setConversations((current) => current.map((c) => (c.id === ticket.conversationId ? { ...c, ticket } : c)));
+    const onSettings = (s: { conversationId: string; pinnedMessageId?: string | null; slowModeSec?: number }) =>
+      setConversations((current) =>
+        current.map((c) =>
+          c.id === s.conversationId
+            ? { ...c, ...(s.pinnedMessageId !== undefined ? { pinnedMessageId: s.pinnedMessageId } : {}), ...(s.slowModeSec !== undefined ? { slowModeSec: s.slowModeSec } : {}) }
+            : c
+        )
+      );
+    const onOnline = ({ userId }: { userId: string }) => setOnline((s) => (s.has(userId) ? s : new Set(s).add(userId)));
     const onOffline = ({ userId }: { userId: string }) =>
-      setOnlineUsers((prev) => {
-        const next = new Set(prev);
+      setOnline((s) => {
+        if (!s.has(userId)) return s;
+        const next = new Set(s);
         next.delete(userId);
         return next;
       });
-
+    socket.on("conversation:updated", onUpdate);
+    socket.on("conversation:removed", onRemoved);
+    socket.on("conversation:added", onAdded);
+    socket.on("ticket:updated", onTicket);
+    socket.on("conversation:settings", onSettings);
     socket.on("user:online", onOnline);
     socket.on("user:offline", onOffline);
     return () => {
+      socket.off("conversation:updated", onUpdate);
+      socket.off("conversation:removed", onRemoved);
+      socket.off("conversation:added", onAdded);
+      socket.off("ticket:updated", onTicket);
+      socket.off("conversation:settings", onSettings);
       socket.off("user:online", onOnline);
       socket.off("user:offline", onOffline);
     };
-  }, [socket]);
+  }, [socket, selectedId, addConversation]);
 
+  // Online dots for the people in DMs (only contacts are ever reported).
+  const partnerKey = useMemo(
+    () => [...new Set(conversations.flatMap((c) => (c.otherUserId ? [c.otherUserId] : [])))].slice(0, 200).join(","),
+    [conversations]
+  );
   useEffect(() => {
-    if (!socket || !selectedId) return;
-    let cancelled = false;
-
-    const join = () => {
-      socket.emit("conversation:join", selectedId);
-      socket.emit("message:read", selectedId);
-    };
-    const loadLatest = () =>
-      fetch(`/api/v1/chat/conversations/${selectedId}/messages`)
-        .then((res) => res.json())
-        .then((data) => {
-          // A slow response for a conversation the user already left must not overwrite this one.
-          if (cancelled) return;
-          setMessages(data.messages ?? []);
-          setHasEarlier(!!data.hasMore);
-        })
-        .finally(() => {
-          if (!cancelled) setLoadingMessages(false);
-        });
-
-    // While disconnected, socket.io would buffer the join and onConnect below sends it anyway.
-    if (socket.connected) join();
-    // Deferred one tick: setState must not be called synchronously from inside an effect body.
-    queueMicrotask(() => {
-      setSeenByOther(false);
-      setTypingLabel(null);
-      setLoadingMessages(true);
-      // Presence is per conversation room - the join above re-announces whoever is here.
-      setOnlineUsers(new Set());
+    if (!socket || !connected || !partnerKey) return;
+    socket.timeout(5_000).emit("presence:query", partnerKey.split(","), (err: Error | null, res?: { online?: string[] }) => {
+      if (!err && res?.online) setOnline(new Set(res.online));
     });
-    loadLatest();
+  }, [socket, connected, partnerKey]);
 
-    // A reconnect (network blip, server restart, laptop waking up) is a brand-new server-side
-    // socket that isn't in any conversation room - without re-joining, the open conversation
-    // silently stops receiving messages. Refetch too, so anything sent meanwhile shows up.
-    const onConnect = () => {
-      join();
-      loadLatest();
-    };
-
-    const onNewMessage = (message: ChatMessage) => {
-      if (message.conversationId !== selectedId) {
-        setConversations((prev) =>
-          prev.map((c) =>
-            c.id === message.conversationId
-              ? { ...c, lastMessage: message.content, lastMessageAt: message.createdAt, unread: true }
-              : c
-          )
-        );
-        return;
-      }
-      setMessages((prev) => [...prev, message]);
-      setConversations((prev) =>
-        prev.map((c) =>
-          c.id === selectedId ? { ...c, lastMessage: message.content, lastMessageAt: message.createdAt } : c
-        )
-      );
-      if (message.senderId !== currentUser.id) socket.emit("message:read", selectedId);
-    };
-    const onTypingStart = (payload: { conversationId: string; userId: string; name: string | null }) => {
-      if (payload.conversationId === selectedId && payload.userId !== currentUser.id) {
-        setTypingLabel(payload.name ?? "Someone");
-      }
-    };
-    const onTypingStop = (payload: { conversationId: string; userId: string }) => {
-      if (payload.conversationId === selectedId && payload.userId !== currentUser.id) setTypingLabel(null);
-    };
-    const onRead = (payload: { conversationId: string; userId: string }) => {
-      if (payload.conversationId === selectedId && payload.userId !== currentUser.id) setSeenByOther(true);
-    };
-
-    socket.on("connect", onConnect);
-    socket.on("message:new", onNewMessage);
-    socket.on("typing:start", onTypingStart);
-    socket.on("typing:stop", onTypingStop);
-    socket.on("message:read", onRead);
-
-    return () => {
-      cancelled = true;
-      socket.emit("conversation:leave", selectedId);
-      socket.off("connect", onConnect);
-      socket.off("message:new", onNewMessage);
-      socket.off("typing:start", onTypingStart);
-      socket.off("typing:stop", onTypingStop);
-      socket.off("message:read", onRead);
-    };
-  }, [socket, selectedId, currentUser.id]);
-
-  useEffect(() => {
-    // Prepending older history shouldn't yank the view back to the bottom.
-    if (prependedEarlier.current) {
-      prependedEarlier.current = false;
-      return;
-    }
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  async function loadEarlier() {
-    const oldest = messages[0];
-    if (!selectedId || !oldest) return;
-    const conversationId = selectedId;
-    setLoadingEarlier(true);
-    try {
-      const res = await fetch(
-        `/api/v1/chat/conversations/${conversationId}/messages?before=${encodeURIComponent(oldest.id)}`
-      );
-      const data = await res.json();
-      if (!res.ok) return toast.error(data.error ?? "Could not load earlier messages");
-      prependedEarlier.current = true;
-      setMessages((prev) => (prev[0]?.conversationId === conversationId ? [...(data.messages ?? []), ...prev] : prev));
-      setHasEarlier(!!data.hasMore);
-    } finally {
-      setLoadingEarlier(false);
-    }
+  function openConversation(id: string) {
+    setSelectedId(id);
+    setComposing(false);
+    setConversations((current) => current.map((c) => (c.id === id ? { ...c, unread: 0 } : c)));
+    const url = new URL(window.location.href);
+    url.searchParams.set("c", id);
+    window.history.replaceState(null, "", url);
   }
 
-  function openConversation(conversationId: string) {
-    setSelectedId(conversationId);
-    setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, unread: false } : c)));
+  function closeConversation() {
+    setSelectedId(null);
+    const url = new URL(window.location.href);
+    url.searchParams.delete("c");
+    window.history.replaceState(null, "", url);
   }
 
-  async function handleStartDirect(userId: string) {
-    const result = await startDirectConversationAction(userId);
-    if ("error" in result) return toast.error(result.error);
-    if (!conversations.some((c) => c.id === result.conversationId)) {
-      setConversations((prev) => [
-        { id: result.conversationId, type: "DIRECT", label: "Direct message", lastMessage: null, lastMessageAt: null, unread: false },
-        ...prev,
-      ]);
-    }
-    openConversation(result.conversationId);
+  async function openStarted(result: { error?: string; conversationId?: string }) {
+    if (result.error || !result.conversationId) return toast.error(result.error ?? "Could not open the conversation");
+    const id = result.conversationId;
+    if (!conversations.some((c) => c.id === id)) await addConversation(id);
+    openConversation(id);
   }
 
-  async function handleStartCourseGroup(courseId: string, label: string) {
-    const result = await startCourseGroupConversationAction(courseId);
-    if ("error" in result) return toast.error(result.error);
-    if (!conversations.some((c) => c.id === result.conversationId)) {
-      setConversations((prev) => [
-        { id: result.conversationId, type: "COURSE_GROUP", label, lastMessage: null, lastMessageAt: null, unread: false },
-        ...prev,
-      ]);
-    }
-    openConversation(result.conversationId);
-  }
+  const startDirect = async (userId: string) => openStarted(await startDirectConversationAction(userId));
+  const startGroup = async (courseId: string) => openStarted(await startCourseGroupConversationAction(courseId));
+  const contactSupport = async () => openStarted(await startSupportConversationAction());
 
-  async function handleContactSupport() {
-    const result = await startSupportConversationAction();
-    if ("error" in result) return toast.error(result.error);
-    if (!conversations.some((c) => c.id === result.conversationId)) {
-      setConversations((prev) => [
-        { id: result.conversationId, type: "SUPPORT", label: "Support", lastMessage: null, lastMessageAt: null, unread: false },
-        ...prev,
-      ]);
-    }
-    openConversation(result.conversationId);
-  }
-
-  function handleSend() {
-    if (!socket || !selectedId || !draft.trim()) return;
-    socket.emit("message:send", { conversationId: selectedId, content: draft.trim() }, (res: { error?: string }) => {
-      if (res?.error) toast.error(res.error);
-    });
-    setDraft("");
-    socket.emit("typing:stop", selectedId);
-    if (typingTimeout.current) clearTimeout(typingTimeout.current);
-  }
-
-  function handleDraftChange(value: string) {
-    setDraft(value);
-    if (!socket || !selectedId) return;
-    socket.emit("typing:start", selectedId);
-    if (typingTimeout.current) clearTimeout(typingTimeout.current);
-    typingTimeout.current = setTimeout(() => socket.emit("typing:stop", selectedId), 2000);
-  }
-
-  async function handleHide(messageId: string) {
+  async function hide(messageId: string) {
     const result = await hideMessageAction(messageId);
     if ("error" in result) return toast.error(result.error);
-    setMessages((prev) => prev.map((m) => (m.id === messageId ? { ...m, deletedAt: new Date().toISOString() } : m)));
+    thread.markHidden(messageId);
+  }
+  async function report(messageId: string, reason: string) {
+    const result = await reportMessageAction(messageId, reason);
+    if ("error" in result) toast.error(result.error);
+    else toast.success("Thanks - our team will review it.");
+  }
+  async function pin(conversationId: string, messageId: string | null) {
+    const result = await pinMessageAction(conversationId, messageId);
+    if ("error" in result) return toast.error(result.error);
+    setConversations((current) => current.map((c) => (c.id === conversationId ? { ...c, pinnedMessageId: messageId } : c)));
   }
 
-  function handleContactClick(contact: ChatContact) {
-    if (contact.kind === "direct") return handleStartDirect(contact.id);
-    return handleStartCourseGroup(contact.id, contact.label);
-  }
+  const selected = useMemo(() => conversations.find((c) => c.id === selectedId) ?? null, [conversations, selectedId]);
+  const patchSelected = (patch: Partial<ConversationSummary>) =>
+    setConversations((current) => current.map((c) => (c.id === selectedId ? { ...c, ...patch } : c)));
 
-  const selected = conversations.find((c) => c.id === selectedId);
+  // A course community: its channels this user belongs to, as tabs above the thread.
+  const channels = useMemo(() => {
+    if (!selected || selected.type !== "COURSE_GROUP" || !selected.courseId) return [];
+    return conversations
+      .filter((c) => c.type === "COURSE_GROUP" && c.courseId === selected.courseId)
+      .sort((a, b) => CHANNEL_ORDER.indexOf(a.channel ?? "GENERAL") - CHANNEL_ORDER.indexOf(b.channel ?? "GENERAL") || a.label.localeCompare(b.label));
+  }, [conversations, selected]);
 
-  const listContacts = contacts.filter((c) => !c.dropdown);
-  const dropdownContacts = contacts.filter((c) => c.dropdown);
-  const listGroups = new Map<string, ChatContact[]>();
-  for (const contact of listContacts) {
-    const key = contact.group ?? "";
-    listGroups.set(key, [...(listGroups.get(key) ?? []), contact]);
-  }
+  const otherOnline = selected?.otherUserId ? online.has(selected.otherUserId) || thread.online.has(selected.otherUserId) : false;
+  const connectionNote = connected ? null : socketError ? "Offline - messages send when you're back" : "Connecting…";
+  const totalUnread = conversations.reduce((sum, c) => sum + c.unread, 0);
+
+  const details = selected ? (
+    <ChatDetails
+      conversation={selected}
+      currentUserId={currentUser.id}
+      socket={socket}
+      isStaff={isModerator}
+      onClose={() => setDetailsOpen(false)}
+      onUpdated={patchSelected}
+      onBatchCreated={(id) => void addConversation(id).then(() => openConversation(id))}
+    />
+  ) : null;
 
   return (
-    <div className="grid gap-4 md:grid-cols-[280px_1fr]">
-      <div className="space-y-3">
-        {(dropdownContacts.length > 0 || showContactSupport || allowStaffSearch) && (
-          <StaffContactPanel
-            dropdownContacts={dropdownContacts}
+    <div
+      className={cn(
+        "grid h-[calc(100dvh-11rem)] min-h-[480px] grid-cols-[minmax(0,1fr)] overflow-hidden rounded-xl bg-card ring-1 ring-foreground/10 md:grid-cols-[320px_minmax(0,1fr)]",
+        detailsOpen && selected && isWide && "xl:grid-cols-[320px_minmax(0,1fr)_18rem]"
+      )}
+    >
+      <aside className={cn("flex min-h-0 flex-col border-r", selected && "hidden md:flex")} aria-label="Inbox">
+        <div className="flex items-center justify-between gap-2 px-3 pt-3 pb-2">
+          <h2 className="font-heading text-base font-semibold">
+            Inbox
+            {totalUnread > 0 && <span className="ml-1.5 text-sm font-normal text-muted-foreground">({totalUnread} unread)</span>}
+          </h2>
+          {(contacts.length > 0 || showContactSupport || allowStaffSearch) && (
+            <Button size="sm" variant={composing ? "ghost" : "outline"} onClick={() => setComposing((v) => !v)}>
+              {composing ? <X aria-hidden /> : <PenSquare aria-hidden />}
+              {composing ? "Close" : "New message"}
+            </Button>
+          )}
+        </div>
+        {composing && (
+          <NewConversationPanel
+            contacts={contacts}
             showContactSupport={showContactSupport}
             allowStaffSearch={allowStaffSearch}
-            onSelectContact={handleContactClick}
-            onContactSupport={handleContactSupport}
-            onSelectUser={handleStartDirect}
+            onSelectContact={(contact) => (contact.kind === "direct" ? startDirect(contact.id) : startGroup(contact.id))}
+            onContactSupport={contactSupport}
+            onSelectUser={(userId) => startDirect(userId)}
           />
         )}
+        <ConversationList conversations={conversations} selectedId={selectedId} query={query} online={online} onQueryChange={setQuery} onSelect={openConversation} />
+      </aside>
 
-        {listContacts.length > 0 && (
-          <div className="space-y-3 rounded-lg border p-3">
-            {[...listGroups.entries()].map(([group, groupContacts]) => (
-              <div key={group || "_"} className="space-y-1.5">
-                {group && <p className="text-xs font-medium text-muted-foreground">{group}</p>}
-                {groupContacts.map((contact) => (
-                  <Button
-                    key={`${contact.kind}-${contact.id}`}
-                    variant="outline"
-                    size="sm"
-                    className="w-full justify-start"
-                    onClick={() => handleContactClick(contact)}
-                  >
-                    {contact.label}
-                    {contact.kind === "course_group" && " (group)"}
-                  </Button>
-                ))}
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="space-y-1">
-          {conversations.map((c) => (
-            <button
-              key={c.id}
-              onClick={() => openConversation(c.id)}
-              className={cn(
-                "block w-full rounded-md border p-2 text-left text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-                c.id === selectedId ? "bg-muted" : "hover:bg-muted/50"
-              )}
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-medium">{c.label}</span>
-                {c.unread && <Badge variant="secondary">New</Badge>}
-              </div>
-              {c.lastMessage && <p className="truncate text-xs text-muted-foreground">{c.lastMessage}</p>}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex min-h-[420px] flex-col rounded-lg border">
-        {!selected && conversations.length === 0 ? (
+      <div className={cn("min-h-0", !selected && "hidden md:block")}>
+        {selected ? (
+          <MessageThread
+            key={selected.id}
+            title={selected.type === "COURSE_GROUP" ? (selected.courseTitle ?? selected.label) : selected.label}
+            subtitle={
+              selected.type === "DIRECT" ? (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className={cn("size-2 rounded-full", otherOnline ? "bg-primary" : "bg-muted-foreground/40")} aria-hidden />
+                  {otherOnline ? "Online" : "Direct message"}
+                </span>
+              ) : selected.type === "SUPPORT" && selected.ticket ? (
+                `Support · ${TICKET_STATUS[selected.ticket.status]}`
+              ) : selected.type === "COURSE_GROUP" ? (
+                thread.online.size > 0 ? `${thread.online.size} online` : TYPE_LABEL.COURSE_GROUP
+              ) : (
+                TYPE_LABEL[selected.type]
+              )
+            }
+            headerExtra={
+              channels.length > 1 && (
+                <div role="tablist" aria-label="Channels" className="flex gap-1 overflow-x-auto border-b px-2 py-1.5">
+                  {channels.map((c) => (
+                    <button
+                      key={c.id}
+                      role="tab"
+                      type="button"
+                      aria-selected={c.id === selected.id}
+                      onClick={() => openConversation(c.id)}
+                      className={cn(
+                        "flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                        c.id === selected.id ? "bg-primary/10 font-medium text-primary" : "text-muted-foreground hover:bg-muted"
+                      )}
+                    >
+                      {c.channel === "BATCH" ? c.label.split(" · ").pop() : c.channel === "ANNOUNCEMENTS" ? "#announcements" : c.channel === "QA" ? "#q-and-a" : "#general"}
+                      {c.unread > 0 && c.id !== selected.id && <span className="rounded-full bg-primary px-1.5 text-[10px] text-primary-foreground">{c.unread}</span>}
+                    </button>
+                  ))}
+                </div>
+              )
+            }
+            currentUserId={currentUser.id}
+            isDirect={selected.type === "DIRECT"}
+            isGroup={selected.type !== "DIRECT"}
+            canPost={selected.canPost}
+            postingBlockedReason={selected.postingBlockedReason}
+            canModerate={selected.canModerate}
+            pinnedMessageId={selected.pinnedMessageId}
+            connectionNote={connectionNote}
+            thread={thread}
+            onBack={closeConversation}
+            onHide={hide}
+            onReport={report}
+            onPin={(messageId) => void pin(selected.id, messageId)}
+            onTyping={(typing) => socket?.emit(typing ? "typing:start" : "typing:stop", selected.id)}
+            onOpenDetails={() => setDetailsOpen((o) => !o)}
+          />
+        ) : conversations.length === 0 ? (
           (emptyState ?? (
             <EmptyState
               icon={MessagesSquare}
               title="No conversations yet"
-              description="Pick someone from the list to start chatting. New messages arrive instantly."
-              className="flex-1 justify-center rounded-none border-0 bg-transparent"
+              description="Start one with New message. Messages arrive instantly."
+              className="h-full justify-center rounded-none border-0 bg-transparent"
             />
           ))
-        ) : !selected ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
-            <MessagesSquare className="size-6" aria-hidden />
-            Select a conversation
-          </div>
         ) : (
-          <>
-            <div className="border-b p-3 text-sm font-medium">
-              {selected.label}
-              {!connected && socketError && (
-                <span className="ml-2 text-xs text-destructive">({socketError})</span>
-              )}
-              {!connected && !socketError && (
-                <span className="ml-2 text-xs text-muted-foreground">(connecting...)</span>
-              )}
-            </div>
-            <div className="flex-1 space-y-2 overflow-y-auto p-3">
-              {loadingMessages && <p className="text-sm text-muted-foreground">Loading...</p>}
-              {!loadingMessages && hasEarlier && (
-                <Button variant="ghost" size="sm" className="mx-auto block" onClick={loadEarlier} disabled={loadingEarlier}>
-                  {loadingEarlier ? "Loading..." : "Load earlier messages"}
-                </Button>
-              )}
-              {messages.map((m) => (
-                <div key={m.id} className={cn("max-w-[80%] rounded-lg px-3 py-2 text-sm", m.senderId === currentUser.id ? "ml-auto bg-primary text-primary-foreground" : "bg-muted")}>
-                  {m.senderId !== currentUser.id && (
-                    <p className="mb-0.5 text-xs font-medium opacity-70">
-                      {m.sender.name ?? "User"}
-                      {onlineUsers.has(m.senderId) && " · online"}
-                    </p>
-                  )}
-                  <p>{m.deletedAt ? <em className="opacity-70">Message removed</em> : m.content}</p>
-                  {isModerator && !m.deletedAt && (
-                    <button onClick={() => handleHide(m.id)} className="mt-1 text-xs underline opacity-70">
-                      Hide
-                    </button>
-                  )}
-                </div>
-              ))}
-              <div ref={bottomRef} />
-            </div>
-            <div className="min-h-5 px-3 text-xs text-muted-foreground">
-              {typingLabel ? `${typingLabel} is typing...` : seenByOther ? "Seen" : ""}
-            </div>
-            <div className="flex gap-2 border-t p-3">
-              <Textarea
-                value={draft}
-                onChange={(e) => handleDraftChange(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    handleSend();
-                  }
-                }}
-                placeholder="Write a message..."
-                rows={1}
-                className="min-h-9 resize-none"
-              />
-              <Button onClick={handleSend} disabled={!connected || !draft.trim()}>
-                Send
-              </Button>
-            </div>
-          </>
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+            <MessagesSquare className="size-6" aria-hidden />
+            Pick a conversation
+          </div>
         )}
       </div>
+
+      {detailsOpen && selected && isWide && <div className="hidden min-h-0 border-l xl:block">{details}</div>}
+      {selected && !isWide && (
+        <Sheet open={detailsOpen} onOpenChange={setDetailsOpen}>
+          <SheetContent side="right" showCloseButton={false} className="w-[min(22rem,90vw)] p-0">
+            <SheetTitle className="sr-only">Conversation details</SheetTitle>
+            {details}
+          </SheetContent>
+        </Sheet>
+      )}
     </div>
   );
 }

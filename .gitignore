@@ -19,6 +19,8 @@
 
 # production
 /build
+# compiled socket server and worker (npm run build:services)
+/dist/
 
 # misc
 .DS_Store

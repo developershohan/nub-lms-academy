@@ -8,7 +8,7 @@ vi.mock("@/lib/stripe", () => ({ getStripeClient: vi.fn() }));
 vi.mock("@/lib/permissions", () => ({ canAdminAccess: vi.fn().mockResolvedValue(true) }));
 vi.mock("@/lib/audit", () => ({ logAudit: vi.fn() }));
 vi.mock("@/server/services/coupon-service", () => ({ validateCoupon: vi.fn(), calculateDiscount: vi.fn() }));
-vi.mock("@/server/services/notification-service", () => ({ notifyAdmins: vi.fn() }));
+vi.mock("@/server/services/notification-service", () => ({ notify: vi.fn(), notifyAdmins: vi.fn() }));
 vi.mock("@/server/services/settings-service", () => ({
   getPlatformSettings: vi.fn().mockResolvedValue({ autoApprovePayments: true }),
 }));
@@ -41,6 +41,8 @@ const completedEvent = (id: string) =>
 beforeEach(() => {
   prisma.$reset();
   getStripeClientMock.mockReset();
+  // The purchase receipt looks up course titles for its notification.
+  prisma.course.findMany.mockResolvedValue([]);
 });
 
 describe("markOrderPaid (via the Stripe webhook)", () => {

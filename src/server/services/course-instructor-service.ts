@@ -1,12 +1,13 @@
 import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { studioHref } from "@/lib/studio";
 import { canManageCourse } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { createNotifications } from "@/server/services/notification-service";
+import { notify } from "@/server/services/notification-service";
 
 function revalidateCoursePaths(courseId: string) {
-  revalidatePath(`/teacher/courses/${courseId}/edit`);
+  revalidatePath(studioHref(courseId), "layout");
 }
 
 export function listSubInstructors(courseId: string) {
@@ -64,14 +65,14 @@ export async function addSubInstructorByEmail(actorId: string, courseId: string,
 
   await prisma.courseInstructor.create({ data: { courseId, userId: target.id, addedById: actorId } });
   await logAudit(actorId, "course:add-sub-instructor", "Course", courseId, { userId: target.id });
-  await createNotifications([
-    {
-      userId: target.id,
-      type: "course_instructor",
-      title: `You were added as a sub-instructor on ${course?.title ?? "a course"}`,
-      link: "/teacher/messages",
-    },
-  ]);
+  await notify([target.id], {
+    type: "course_instructor",
+    title: `You were added as a sub-instructor on ${course?.title ?? "a course"}`,
+    link: "/teacher/messages",
+    actorId,
+    entity: { type: "Course", id: courseId },
+    refreshPage: true,
+  });
   revalidateCoursePaths(courseId);
   return { ok: true } as const;
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { QUIZ_SUBMIT_GRACE_MS, canRevealAnswers, isAttemptExpired, quizDeadline } from "./quiz-rules";
+import { QUIZ_SUBMIT_GRACE_MS, attemptBlock, canRevealAnswers, isAttemptExpired, quizDeadline } from "./quiz-rules";
 
 const startedAt = new Date("2026-10-17T10:00:00Z");
 const at = (ms: number) => new Date(startedAt.getTime() + ms);
@@ -29,5 +29,31 @@ describe("canRevealAnswers", () => {
   it("reveals answers after a pass or once the last attempt is used", () => {
     expect(canRevealAnswers({ hasPassed: true, maxAttempts: null, submittedAttempts: 1 })).toBe(true);
     expect(canRevealAnswers({ hasPassed: false, maxAttempts: 3, submittedAttempts: 3 })).toBe(true);
+  });
+});
+
+describe("attemptBlock", () => {
+  const now = new Date("2026-10-18T12:00:00Z");
+  const minutesBefore = (m: number) => new Date(now.getTime() - m * 60_000);
+  const base = { maxAttempts: 3, submittedAttempts: 1, lastSubmittedAt: minutesBefore(5), cooldownMin: null };
+
+  it("allows a retake with attempts left and no cooldown", () => {
+    expect(attemptBlock(base, now)).toBeNull();
+  });
+
+  it("blocks once every attempt is used", () => {
+    expect(attemptBlock({ ...base, submittedAttempts: 3 }, now)).toEqual({ reason: "no-attempts-left" });
+  });
+
+  it("blocks during the cooldown and says when it ends", () => {
+    expect(attemptBlock({ ...base, cooldownMin: 30 }, now)).toEqual({
+      reason: "cooldown",
+      availableAt: new Date(minutesBefore(5).getTime() + 30 * 60_000),
+    });
+    expect(attemptBlock({ ...base, cooldownMin: 5 }, new Date(now.getTime() + 1))).toBeNull();
+  });
+
+  it("has nothing to wait for before the first attempt", () => {
+    expect(attemptBlock({ ...base, submittedAttempts: 0, lastSubmittedAt: null, cooldownMin: 60 }, now)).toBeNull();
   });
 });

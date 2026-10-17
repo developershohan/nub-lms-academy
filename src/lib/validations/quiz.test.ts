@@ -20,4 +20,24 @@ describe("quizSettingsSchema", () => {
   it("rejects a zero time limit", () => {
     expect(quizSettingsSchema.safeParse({ ...base, timeLimitSec: "0" }).success).toBe(false);
   });
+
+  it("turns the studio's minutes into seconds, and a blank minutes field into no limit", () => {
+    expect(quizSettingsSchema.parse({ ...base, timeLimitMin: "1.5" }).timeLimitSec).toBe(90);
+    expect(quizSettingsSchema.parse({ ...base, timeLimitMin: "" }).timeLimitSec).toBeUndefined();
+  });
+
+  it("reads ticked and unticked checkboxes", () => {
+    const data = quizSettingsSchema.parse({ ...base, shuffleQuestions: "on" });
+    expect(data.shuffleQuestions).toBe(true);
+    expect(!!data.partialCredit).toBe(false);
+  });
+
+  it("requires a positive draw count and cooldown when given", () => {
+    expect(quizSettingsSchema.safeParse({ ...base, drawCount: "0" }).success).toBe(false);
+    expect(quizSettingsSchema.safeParse({ ...base, retakeCooldownMin: "0" }).success).toBe(false);
+    expect(quizSettingsSchema.parse({ ...base, drawCount: "", retakeCooldownMin: "" })).toMatchObject({
+      drawCount: undefined,
+      retakeCooldownMin: undefined,
+    });
+  });
 });

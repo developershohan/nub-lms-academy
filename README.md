@@ -52,12 +52,15 @@ A production-oriented, role-based learning management system built with Next.js.
 
 ## Architecture
 
-The repository contains two deployable services that share the same PostgreSQL database and authentication secret:
+The repository contains three deployable services that share the same PostgreSQL database, Redis and authentication secret:
 
 1. **Next.js application** — pages, Server Actions, API routes, authentication, business logic, and the web interface. It runs locally on port `3000` and can be deployed to Vercel or another Node.js-compatible platform.
-2. **Socket.IO server** — the persistent process under `socket-server/` that handles chat and real-time notifications. It runs locally on port `3001` and must be deployed to a host that supports long-running Node.js processes.
+2. **Socket.IO server** — the persistent process under `socket-server/` that handles chat and real-time notifications. It runs locally on port `3001` and must be deployed to a host that supports long-running Node.js processes. Several instances can run behind a load balancer: Redis joins them up (`@socket.io/redis-adapter`), and the web app publishes events to them through Redis (`@socket.io/redis-emitter`). Presence and per-user rate limits are Redis keys too, so no instance holds state a restart would lose.
+3. **Background worker** — the BullMQ process under `worker/` that sends notification emails and web push, the delayed chat push (after about a minute unread) and the chat email digest (after about 30 minutes), and sweeps course-channel membership. It needs Redis.
 
-In production, both services must use matching `DATABASE_URL`, `AUTH_SECRET`, and `SOCKET_INTERNAL_SECRET` values. The browser-facing application connects to the socket service through `NEXT_PUBLIC_SOCKET_URL`.
+The chat rules themselves (who may read, post in and moderate a conversation, message sequence numbers, idempotent sends) live once in `src/server/chat/` and are shared by the REST API, the Server Actions and the socket server, so they cannot drift apart.
+
+In production, all services must use matching `DATABASE_URL`, `AUTH_SECRET`, `REDIS_URL` and `SOCKET_INTERNAL_SECRET` values. The browser-facing application connects to the socket service through `NEXT_PUBLIC_SOCKET_URL`.
 
 ## Project structure
 
@@ -147,6 +150,9 @@ NEXT_PUBLIC_SOCKET_URL="http://localhost:3001"
 SOCKET_SERVER_URL="http://localhost:3001"
 SOCKET_PORT="3001"
 SOCKET_CORS_ORIGIN="http://localhost:3000"
+
+# Optional locally: start Redis with `docker compose up -d redis`, then uncomment.
+# REDIS_URL="redis://localhost:6379"
 ```
 
 Generate strong local secrets with Node.js:
@@ -167,7 +173,15 @@ npx prisma db seed
 
 Seeding creates roles, demonstration teachers, categories, and published courses. If `ADMIN_EMAIL` is set and no matching user exists, the command creates a super-administrator and prints a temporary password once. Store it securely and change it after signing in.
 
-### 4. Start both services
+### 4. Start Redis (optional)
+
+Real-time features run without Redis: the socket server is then a single node with in-memory presence and rate limits, the web app reaches it over a guarded HTTP bridge, and notification emails and push go out directly from the web app (no digests, no delayed chat push). To run them the way production does, start Redis and set `REDIS_URL` in `.env`:
+
+```bash
+docker compose up -d redis
+```
+
+### 5. Start both services
 
 Terminal one:
 
@@ -181,6 +195,12 @@ Terminal two:
 npm run dev:socket
 ```
 
+Terminal three, when Redis is running (digests, delayed chat push, membership sweep):
+
+```bash
+npm run dev:worker
+```
+
 Open [http://localhost:3000](http://localhost:3000). The socket server listens on `http://localhost:3001` by default.
 
 ## Environment variables
@@ -192,6 +212,11 @@ Open [http://localhost:3000](http://localhost:3000). The socket server listens o
 | `AUTH_SECRET` | Both services | Yes | Signs Auth.js sessions and socket tokens |
 | `NEXTAUTH_SECRET` | Next.js | Yes | Compatibility alias; keep equal to `AUTH_SECRET` |
 | `SOCKET_INTERNAL_SECRET` | Both services | Yes | Protects server-to-server real-time event requests |
+| `REDIS_URL` | All services | Yes in production | Socket.IO Redis adapter (several socket nodes), the emitter the web app publishes events through, presence, rate limits and the job queue |
+| `WORKER_CONCURRENCY` | Worker | Optional | Jobs processed at once per queue (default 5) |
+| `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | Next.js, worker | Optional | Web push keys (`npx web-push generate-vapid-keys`); without them push is simply off |
+| `VAPID_SUBJECT` | Next.js, worker | Optional | `mailto:` contact sent with each push, defaults to the support address |
+| `APP_URL` | Worker | Optional | Public web URL for links in emails sent by the worker; falls back to `NEXT_PUBLIC_APP_URL` |
 | `NEXT_PUBLIC_APP_URL` | Browser/Next.js | Yes | Public URL of the web application |
 | `AUTH_URL`, `NEXTAUTH_URL` | Next.js | Yes | Authentication callback base URL |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Next.js | Optional | Google OAuth credentials |
@@ -243,15 +268,20 @@ Production deploys on Vercel run `npm run vercel-build`, which applies pending m
 | --- | --- |
 | `npm run dev` | Start the Next.js development server |
 | `npm run dev:socket` | Start the Socket.IO server in watch mode |
+| `npm run dev:worker` | Start the background worker in watch mode (needs Redis) |
 | `npm run build` | Create a production Next.js build |
 | `npm run vercel-build` | Vercel's build command: runs `prisma migrate deploy` when `VERCEL_ENV` is `production`, then `next build` |
+| `npm run build:services` | Compile the socket server and worker to `dist/` with esbuild |
 | `npm run start` | Run the built Next.js application |
-| `npm run start:socket` | Run the Socket.IO server in production mode |
+| `npm run start:socket` | Build and run the compiled Socket.IO server |
+| `npm run start:worker` | Build and run the compiled background worker |
+| `npm run test:integration` | Run the integration suites on a throwaway PostgreSQL and Redis |
+| `npm run load:chat` | Chat load test: N users on several socket nodes, with a mid-run node kill (see below) |
 | `npm run lint` | Run ESLint |
 | `npm run typecheck` | Run TypeScript without emitting files |
 | `npm run test` | Run Vitest in watch mode |
 | `npm run test:run` | Run the test suite once |
-| `npm run check` | Run lint, type checking, tests, and production build |
+| `npm run check` | Run lint, type checking, tests, the service bundles and the production build |
 
 ## User roles
 
@@ -273,11 +303,24 @@ Run the complete local quality gate before opening a pull request:
 npm run check
 ```
 
-Payment, permission and account-security flows also have integration tests that run the real services against a real PostgreSQL. The tests start a throwaway database themselves (via `embedded-postgres`, so no Docker or local install is needed), apply the migrations and delete it afterwards. They never touch `DATABASE_URL`.
+Payment, permission, account-security, chat and notification flows also have integration tests that run the real services against a real PostgreSQL. The tests start a throwaway database themselves (via `embedded-postgres`, so no Docker or local install is needed), apply the migrations and delete it afterwards. They never touch `DATABASE_URL`.
 
 ```bash
 npm run test:integration
 ```
+
+The real-time suite (`test/integration/realtime.test.ts`) also starts two socket server nodes in-process on a Redis: set `TEST_REDIS_URL` to one you can wipe (it is flushed between tests; CI uses a Redis service container), or leave it unset and a throwaway `redis-memory-server` is started - on Windows that downloads Memurai Developer into `node_modules/.cache` the first time. Without any Redis the suite skips itself.
+
+### Chat load test
+
+`scripts/load/chat-load.ts` drives real Socket.IO clients through the app's protocol (acknowledged sends, `clientMsgId` retries, sequence-number gap sync) against compiled socket nodes and the worker, optionally killing a node halfway, and reports delivery latency and lost messages. It seeds and then deletes its own users, so point it at a throwaway database:
+
+```bash
+npm run build:services
+DATABASE_URL=postgresql://... REDIS_URL=redis://localhost:6379 AUTH_SECRET=anything npm run load:chat -- --users 500 --duration 60 --nodes 2 --restart
+```
+
+The launch gate is 95% of messages delivered in under a second with 500 concurrent users, and none lost across a socket node restart.
 
 GitHub Actions runs Prisma generation and validation, linting, type checking, unit and integration tests, and the production build for pull requests and pushes to `master`.
 
@@ -297,13 +340,25 @@ When changing authorization, payments, enrollment, quizzes, or database transact
 
 Deploy the same repository to Render, Railway, Fly.io, or another host that supports a persistent Node.js process.
 
-- Start command: `npm run start:socket`
+- Build command: `npm ci && npx prisma generate && npm run build:services`
+- Start command: `npm run start:socket` (runs the compiled `dist/socket-server/index.mjs`)
 - Health endpoint: `GET /health`
+- Run it on an always-on instance: free instances sleep after 15 minutes idle, which breaks instant chat and notifications.
 - Set `DATABASE_URL`, `AUTH_SECRET`, and `SOCKET_INTERNAL_SECRET` to the same values used by the Next.js deployment.
+- Add a Redis-compatible store (on Render, a Key Value instance in the same region) and set its internal `REDIS_URL` on both the socket service and the web app.
 - Set `SOCKET_CORS_ORIGIN` to the exact public web origin. Use commas for multiple origins.
 - Set `NEXT_PUBLIC_SOCKET_URL` and `SOCKET_SERVER_URL` in the web deployment to the public socket-service URL.
 
 Because `NEXT_PUBLIC_SOCKET_URL` is compiled into the browser bundle, redeploy the Next.js application after changing it.
+
+### Background worker
+
+Deploy the repository once more as a background worker (on Render: a Background Worker service, no public port).
+
+- Build command: `npm ci && npx prisma generate && npm run build:services`
+- Start command: `npm run start:worker`
+- Set `DATABASE_URL`, `REDIS_URL`, `RESEND_API_KEY`, `EMAIL_FROM` and `APP_URL` (the public web URL, for links in emails). Add `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` and `VAPID_SUBJECT` on both the worker and the web app to turn on web push; generate a pair with `npx web-push generate-vapid-keys`.
+- One instance is enough to start; BullMQ shares the queues safely if you add more.
 
 ### Stripe webhooks
 

@@ -52,7 +52,12 @@ function CardFrame({ className, children }: { className?: string; children: Reac
 
 export function StatCardsSkeleton({ count = 3 }: { count?: number }) {
   return (
-    <div className={cn("grid gap-4", count === 2 ? "sm:grid-cols-2" : "sm:grid-cols-3")}>
+    <div
+      className={cn(
+        "grid gap-4",
+        count === 2 ? "sm:grid-cols-2" : count === 4 ? "grid-cols-2 gap-3 lg:grid-cols-4" : "sm:grid-cols-3"
+      )}
+    >
       {Array.from({ length: count }, (_, i) => (
         <CardFrame key={i} className="space-y-4">
           <Skeleton className="h-4 w-24" />

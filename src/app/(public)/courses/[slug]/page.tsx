@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { BarChart3, CalendarClock, Check, ChevronRight, Globe, Users } from "lucide-react";
 import { getCurrentUser } from "@/lib/permissions";
+import { RecordCourseView } from "@/components/course/record-course-view";
 import { getEnrollment } from "@/server/services/enrollment-service";
 import { isWishlisted } from "@/server/services/wishlist-service";
 import { getCourseLanding } from "@/server/services/course-landing-service";
@@ -113,6 +114,7 @@ export default async function CourseDetailPage({ params }: Props) {
   return (
     <div className="pb-24 lg:pb-16">
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdScript(jsonLd) }} />
+      {user && <RecordCourseView courseId={course.id} />}
 
       {/* Hero */}
       <section className="border-b bg-muted/50">

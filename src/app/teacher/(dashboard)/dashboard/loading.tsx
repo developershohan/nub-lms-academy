@@ -7,9 +7,9 @@ import {
 
 export default function TeacherDashboardLoading() {
   return (
-    <LoadingRegion label="Loading your dashboard" className="space-y-6">
+    <LoadingRegion label="Loading your dashboard" className="space-y-8">
       <HeadingSkeleton action />
-      <StatCardsSkeleton count={3} />
+      <StatCardsSkeleton count={4} />
       <ListRowsSkeleton rows={3} />
     </LoadingRegion>
   );

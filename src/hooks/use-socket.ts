@@ -37,7 +37,7 @@ async function fetchSocketToken(): Promise<TokenResult> {
  * signed token (see /api/v1/socket-token) fetched fresh on every (re)connect attempt, rather
  * than the NextAuth session cookie - the socket server can live on a different domain than the
  * Next.js app in production, and browsers don't send one domain's cookies to another (see
- * socket-server/auth.ts). Transport is polling-only - see the comment below. */
+ * socket-server/auth.ts). WebSocket first, polling as the fallback - see the comment below. */
 export function useSocket() {
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,12 +61,12 @@ export function useSocket() {
     const isNewSocket = !sharedSocket;
     if (!sharedSocket) {
       sharedSocket = io(socketUrl ?? "http://localhost:3001", {
-        // Some hosts' free-tier proxies don't cleanly pass through the HTTP Upgrade handshake
-        // that a polling->websocket transport switch needs, even though plain HTTP (polling)
-        // works fine - the socket connects, then gets killed a moment later while upgrading.
-        // Staying on polling trades a little latency for connections that don't randomly drop.
-        // Do not re-enable "websocket" until this is confirmed to work reliably in production.
-        transports: ["polling"],
+        // WebSocket first: lower latency and load than long-polling. Polling stays as the fallback
+        // for networks or proxies that block the upgrade - tryAllTransports moves on to it when a
+        // WebSocket can't be opened. (Polling-only was a workaround for Render's free tier; the
+        // socket service now needs an always-on instance, where WebSockets work.)
+        transports: ["websocket", "polling"],
+        tryAllTransports: true,
         auth: (cb) => {
           fetchSocketToken().then((result) => {
             if ("error" in result) {
@@ -115,7 +115,7 @@ export function useSocket() {
         message: err.message,
         description: typeof err.description === "string" ? err.description : undefined,
         url: socketUrl,
-        transport: "polling",
+        transport: socket.io.engine?.transport?.name,
       });
     };
 

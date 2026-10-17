@@ -13,6 +13,8 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "src/generated/**",
+    // Compiled socket server and worker (scripts/build-services.mjs).
+    "dist/**",
   ]),
 ]);
 

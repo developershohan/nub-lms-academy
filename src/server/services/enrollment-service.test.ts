@@ -5,7 +5,7 @@ vi.mock("@/lib/prisma", () => import("../../../test/prisma-mock").then((m) => m.
 vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
 vi.mock("@/lib/permissions", () => ({ canManageCourse: vi.fn(), canAdminAccess: vi.fn() }));
 vi.mock("@/lib/audit", () => ({ logAudit: vi.fn() }));
-vi.mock("@/server/services/notification-service", () => ({ createNotifications: vi.fn() }));
+vi.mock("@/server/services/notification-service", () => ({ notify: vi.fn() }));
 
 import { prisma as prismaClient } from "@/lib/prisma";
 import { canAdminAccess, canManageCourse } from "@/lib/permissions";

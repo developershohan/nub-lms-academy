@@ -3,7 +3,9 @@ import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getRoleHome } from "@/lib/role-home";
+import { attemptBlock } from "@/lib/quiz-rules";
 import type { RoleName } from "@/generated/prisma/client";
+import { canAccessConversationAs, getChatUser } from "@/server/chat/access";
 
 export type Permission =
   | "course:create"
@@ -222,21 +224,33 @@ export async function canAccessLesson(userId: string | null, lessonId: string): 
   return canAccessCourse(userId, lesson.section.courseId);
 }
 
-/** Whether the student can start a NEW attempt (course access + under maxAttempts). Past attempts
- * always remain viewable regardless of this check. */
+/** Whether the student can start a NEW attempt: course access, a live (not archived) quiz, an
+ * attempt left, and past any retake cooldown (see attemptBlock). Past attempts always remain
+ * viewable regardless of this check. */
 export async function canAttemptQuiz(userId: string, quizId: string): Promise<boolean> {
   const quiz = await prisma.quiz.findUnique({
     where: { id: quizId },
-    select: { courseId: true, maxAttempts: true },
+    select: { courseId: true, maxAttempts: true, retakeCooldownMin: true, archivedAt: true },
   });
-  if (!quiz) return false;
+  if (!quiz || quiz.archivedAt) return false;
   if (!(await canAccessCourse(userId, quiz.courseId))) return false;
-  if (quiz.maxAttempts == null) return true;
 
-  const submittedCount = await prisma.quizAttempt.count({
-    where: { quizId, userId, status: "SUBMITTED" },
-  });
-  return submittedCount < quiz.maxAttempts;
+  const [submittedAttempts, last] = await Promise.all([
+    prisma.quizAttempt.count({ where: { quizId, userId, status: "SUBMITTED" } }),
+    prisma.quizAttempt.findFirst({
+      where: { quizId, userId, status: "SUBMITTED" },
+      orderBy: { submittedAt: "desc" },
+      select: { submittedAt: true },
+    }),
+  ]);
+  return (
+    attemptBlock({
+      maxAttempts: quiz.maxAttempts,
+      submittedAttempts,
+      lastSubmittedAt: last?.submittedAt ?? null,
+      cooldownMin: quiz.retakeCooldownMin,
+    }) === null
+  );
 }
 
 /**
@@ -255,7 +269,10 @@ export async function canGenerateCertificate(userId: string, courseId: string): 
 
   // A quiz with no questions can't be passed (its score is always 0), so it must not block the
   // certificate - only quizzes a student can actually take count toward eligibility.
-  const quizzes = await prisma.quiz.findMany({ where: { courseId, questions: { some: {} } }, select: { id: true } });
+  const quizzes = await prisma.quiz.findMany({
+    where: { courseId, archivedAt: null, questions: { some: {} } },
+    select: { id: true },
+  });
   if (quizzes.length === 0) return true;
 
   const passedQuizIds = await prisma.quizAttempt.findMany({
@@ -266,31 +283,10 @@ export async function canGenerateCertificate(userId: string, courseId: string): 
   return passedQuizIds.length === quizzes.length;
 }
 
-/**
- * COURSE_GROUP conversations aren't gated by a ConversationParticipant row (participants are
- * added lazily on first visit) - access there is derived live from course access instead, so a
- * student who was enrolled before ever opening the chat can still see the full history. DIRECT
- * and SUPPORT conversations require an actual participant row. Moderators (chat:moderate) can
- * always read, for the admin moderation view.
- */
+/** Whether the user may read this conversation (DMs and support need a membership row; course
+ * channels follow course access; staff may read anything). See resolveAccess for posting rights. */
 export async function canAccessConversation(userId: string, conversationId: string): Promise<boolean> {
-  const user = await prisma.user.findUnique({
-    where: { id: userId },
-    include: { roles: { include: { role: true } } },
-  });
-  if (!user || user.status !== "ACTIVE") return false;
-  const roles = user.roles.map((r) => r.role.name);
-  if (hasPermission(roles, "chat:moderate")) return true;
-
-  const conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
-  if (!conversation) return false;
-
-  if (conversation.type === "COURSE_GROUP") {
-    return conversation.courseId ? canAccessCourse(userId, conversation.courseId) : false;
-  }
-
-  const participant = await prisma.conversationParticipant.findUnique({
-    where: { conversationId_userId: { conversationId, userId } },
-  });
-  return !!participant;
+  // One rule set for the web app and the socket server: src/server/chat/access.ts.
+  const user = await getChatUser(userId);
+  return !!user && (await canAccessConversationAs(user, conversationId));
 }

@@ -10,6 +10,13 @@ export function getRoleHome(roles: RoleName[]): string {
   return "/student/dashboard";
 }
 
+/** The inbox in the user's own dashboard - where /messages (notification links) sends them. */
+export function getMessagesHome(roles: RoleName[]): string {
+  if (roles.includes("SUPER_ADMIN") || roles.includes("ADMIN") || roles.includes("SUPPORT")) return "/admin/messages";
+  if (roles.includes("TEACHER")) return "/teacher/messages";
+  return "/student/messages";
+}
+
 export type RoleDashboard = { key: "student" | "teacher" | "admin"; label: string; href: string };
 
 /**

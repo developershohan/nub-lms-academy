@@ -3,7 +3,9 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { canManageCourse, canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { createNotifications } from "@/server/services/notification-service";
+import { notify } from "@/server/services/notification-service";
+import { realtimeBus } from "@/lib/realtime";
+import { syncCourseMembership } from "@/server/chat/membership";
 
 function revalidateEnrollmentPaths(courseId: string, slug?: string) {
   revalidatePath("/student/dashboard");
@@ -26,6 +28,7 @@ export async function enrollInFreeCourse(userId: string, courseId: string) {
   if (existing) return { error: "Already enrolled" } as const;
 
   await prisma.enrollment.create({ data: { userId, courseId, source: "FREE" } });
+  await syncCourseMembership(realtimeBus, [userId]);
   revalidateEnrollmentPaths(courseId, course.slug);
   return { ok: true } as const;
 }
@@ -120,10 +123,16 @@ export async function enrollUserByEmail(actorId: string, courseId: string, email
     create: { userId: target.id, courseId, source: "ADMIN_GRANT" },
     update: { status: "ACTIVE", source: "ADMIN_GRANT" },
   });
+  await syncCourseMembership(realtimeBus, [target.id]);
   await logAudit(actorId, "enrollment:manual-grant", "Course", courseId, { userId: target.id });
-  await createNotifications([
-    { userId: target.id, type: "enrollment", title: `You were enrolled in ${course.title}`, link: "/student/my-courses" },
-  ]);
+  await notify([target.id], {
+    type: "enrollment",
+    title: `You were enrolled in ${course.title}`,
+    link: "/student/my-courses",
+    actorId,
+    entity: { type: "Course", id: courseId },
+    refreshPage: true,
+  });
   revalidateEnrollmentPaths(courseId, course.slug);
   return { ok: true } as const;
 }

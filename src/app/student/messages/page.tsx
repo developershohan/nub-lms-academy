@@ -9,10 +9,13 @@ import { ChatShell, type ChatContact } from "@/components/chat/chat-shell";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 
-export default async function StudentMessagesPage() {
+export const metadata = { title: "Messages" };
+
+export default async function StudentMessagesPage({ searchParams }: { searchParams: Promise<{ c?: string }> }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
+  const { c } = await searchParams;
   const [conversations, teachers, enrollments, classmates, subInstructors] = await Promise.all([
     listConversationSummariesForUser(user.id),
     listTeachersForStudent(user.id),
@@ -54,10 +57,11 @@ export default async function StudentMessagesPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Messages</h1>
+      <h1 className="font-heading text-2xl font-semibold tracking-tight">Messages</h1>
       <ChatShell
         currentUser={{ id: user.id, name: user.name }}
         initialConversations={conversations}
+        initialSelectedId={c ?? null}
         contacts={contacts}
         showContactSupport
         emptyState={
@@ -67,9 +71,9 @@ export default async function StudentMessagesPage() {
             description={
               enrollments.length > 0
                 ? "Ask your teacher a question, join a course's group chat or say hello to a classmate. Pick someone from the list to start."
-                : "Once you enroll in a course you can message its teacher and classmates here. Need help now? Choose Customer support under Message staff."
+                : "Once you enroll in a course you can message its teacher and classmates here. Need help now? Use New message, then Customer support."
             }
-            className="flex-1 justify-center rounded-none border-0 bg-transparent"
+            className="h-full justify-center rounded-none border-0 bg-transparent"
           >
             {enrollments.length === 0 && (
               <Button size="lg" render={<Link href="/courses" />}>

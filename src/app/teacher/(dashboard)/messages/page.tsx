@@ -9,118 +9,110 @@ import {
   listSubInstructors,
 } from "@/server/services/course-instructor-service";
 import { ChatShell, type ChatContact } from "@/components/chat/chat-shell";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SubInstructorManager } from "@/components/teacher/sub-instructor-manager";
 import { ManualEnrollForm } from "@/components/teacher/manual-enroll-form";
+import { cn } from "@/lib/utils";
 
+export const metadata = { title: "Messages" };
+
+/**
+ * The teacher's inbox - every conversation, whichever course it's about - with each course's
+ * group chat, students and co-instructors under "New message". `?courseId=` opens that course's
+ * tools (co-instructors, manual enrollment) below the inbox; `?c=` opens a conversation.
+ */
 export default async function TeacherMessagesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ courseId?: string }>;
+  searchParams: Promise<{ courseId?: string; c?: string }>;
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const { courseId } = await searchParams;
+  const { courseId, c } = await searchParams;
 
-  const [ownedCourses, subInstructorRows] = await Promise.all([
+  const [ownedCourses, subInstructorRows, conversations] = await Promise.all([
     listTeacherCourses(user.id),
     listCoursesAsSubInstructor(user.id),
+    listConversationSummariesForUser(user.id),
   ]);
 
-  const accessibleCourses = [
-    ...ownedCourses.map((c) => ({ id: c.id, title: c.title, owned: true })),
+  const courses = [
+    ...ownedCourses.map((course) => ({ id: course.id, title: course.title, owned: true })),
     ...subInstructorRows
-      .filter((r) => !ownedCourses.some((c) => c.id === r.course.id))
+      .filter((r) => !ownedCourses.some((course) => course.id === r.course.id))
       .map((r) => ({ id: r.course.id, title: r.course.title, owned: false })),
   ];
 
-  if (!courseId) {
-    return (
-      <div className="space-y-6">
-        <h1 className="text-2xl font-semibold">Messages</h1>
-        <p className="text-muted-foreground">Pick a course to see its students and staff contacts.</p>
-        {accessibleCourses.length === 0 && (
-          <p className="text-sm text-muted-foreground">You don&apos;t have any courses yet.</p>
-        )}
-        <div className="grid gap-3 sm:grid-cols-2">
-          {accessibleCourses.map((c) => (
-            <Link key={c.id} href={`/teacher/messages?courseId=${c.id}`}>
-              <Card className="transition-colors hover:bg-muted/50">
-                <CardHeader>
-                  <CardTitle className="text-base">{c.title}</CardTitle>
-                </CardHeader>
-                <CardContent className="text-sm text-muted-foreground">
-                  {c.owned ? "Your course" : "Sub-instructor"}
-                </CardContent>
-              </Card>
-            </Link>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  const selectedCourse = accessibleCourses.find((c) => c.id === courseId);
-  if (!selectedCourse) {
-    return (
-      <div className="space-y-4">
-        <h1 className="text-2xl font-semibold">Messages</h1>
-        <p className="text-destructive">You don&apos;t have access to that course.</p>
-        <Link href="/teacher/messages" className="text-sm underline">
-          Back to courses
-        </Link>
-      </div>
-    );
-  }
-
-  const [conversations, students, subInstructors] = await Promise.all([
-    listConversationSummariesForUser(user.id),
-    listStudentsForCourse(courseId),
-    listSubInstructors(courseId),
-  ]);
+  const perCourse = await Promise.all(
+    courses.map(async (course) => ({
+      course,
+      students: await listStudentsForCourse(course.id),
+      instructors: await listSubInstructors(course.id),
+    }))
+  );
 
   const contacts: ChatContact[] = [
-    ...students.map((s) => ({
-      kind: "direct" as const,
-      id: s.id,
-      label: s.name ?? s.email,
-      group: "Students",
+    ...courses.map((course) => ({
+      kind: "course_group" as const,
+      id: course.id,
+      label: course.title,
+      group: "Course group chats",
     })),
-    ...subInstructors
-      .filter((i) => i.user.id !== user.id)
-      .map((i) => ({
+    ...perCourse.flatMap(({ course, students }) =>
+      students.map((s) => ({ kind: "direct" as const, id: s.id, label: s.name ?? s.email, group: `Students · ${course.title}` }))
+    ),
+    ...[...new Map(perCourse.flatMap(({ instructors }) => instructors.map((i) => [i.user.id, i.user]))).values()]
+      .filter((instructor) => instructor.id !== user.id)
+      .map((instructor) => ({
         kind: "direct" as const,
-        id: i.user.id,
-        label: i.user.name ?? i.user.email,
-        group: "Sub-instructors",
+        id: instructor.id,
+        label: instructor.name ?? instructor.email,
+        group: "Co-instructors",
         dropdown: true,
       })),
   ];
 
+  const toolsCourse = courseId ? courses.find((course) => course.id === courseId && course.owned) : undefined;
+  const toolsInstructors = toolsCourse ? perCourse.find((p) => p.course.id === toolsCourse.id)!.instructors : [];
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <Link href="/teacher/messages" className="text-sm text-muted-foreground underline">
-            All courses
-          </Link>
-          <h1 className="text-2xl font-semibold">{selectedCourse.title}</h1>
-        </div>
-      </div>
-
+      <h1 className="font-heading text-2xl font-semibold tracking-tight">Messages</h1>
       <ChatShell
         currentUser={{ id: user.id, name: user.name }}
         initialConversations={conversations}
+        initialSelectedId={c ?? null}
         contacts={contacts}
         showContactSupport
       />
 
-      {selectedCourse.owned && (
-        <div className="grid gap-4 sm:grid-cols-2">
-          <SubInstructorManager courseId={courseId} initialInstructors={subInstructors} />
-          <ManualEnrollForm courseId={courseId} />
-        </div>
+      {ownedCourses.length > 0 && (
+        <section aria-labelledby="course-tools-heading" className="space-y-3">
+          <h2 id="course-tools-heading" className="font-heading text-lg font-semibold">
+            Course chat tools
+          </h2>
+          <p className="text-sm text-muted-foreground">Add co-instructors who can answer students, or enroll someone by email.</p>
+          <div className="flex flex-wrap gap-2">
+            {ownedCourses.map((course) => (
+              <Link
+                key={course.id}
+                href={`/teacher/messages?courseId=${course.id}`}
+                className={cn(
+                  "rounded-full border px-3 py-1 text-sm hover:bg-muted",
+                  course.id === toolsCourse?.id && "border-primary bg-primary/10"
+                )}
+              >
+                {course.title}
+              </Link>
+            ))}
+          </div>
+          {toolsCourse && (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <SubInstructorManager courseId={toolsCourse.id} initialInstructors={toolsInstructors} />
+              <ManualEnrollForm courseId={toolsCourse.id} />
+            </div>
+          )}
+        </section>
       )}
     </div>
   );

@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { refreshCourseStats } from "@/server/services/course-stats-service";
+import { notify } from "@/server/services/notification-service";
 
 export function listCourseReviews(courseId: string) {
   return prisma.courseReview.findMany({
@@ -34,12 +35,26 @@ export async function submitReview(
     return { error: "Only enrolled students can review this course" } as const;
   }
 
+  const existing = await prisma.courseReview.findUnique({ where: { userId_courseId: { userId, courseId } }, select: { id: true } });
   await prisma.courseReview.upsert({
     where: { userId_courseId: { userId, courseId } },
     create: { userId, courseId, rating, comment },
     update: { rating, comment },
   });
   await refreshCourseStats(courseId);
+  if (!existing) {
+    const course = await prisma.course.findUnique({ where: { id: courseId }, select: { title: true, teacherId: true } });
+    if (course) {
+      await notify([course.teacherId], {
+        type: "course_review",
+        title: `New ${rating}-star review on "${course.title}"`,
+        body: comment?.slice(0, 140) ?? null,
+        link: "/teacher/dashboard",
+        actorId: userId,
+        entity: { type: "Course", id: courseId },
+      });
+    }
+  }
   revalidatePath(`/courses/${slug}`);
   return { ok: true } as const;
 }

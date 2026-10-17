@@ -1,30 +1,91 @@
 import "server-only";
+import Redis from "ioredis";
+import { Emitter } from "@socket.io/redis-emitter";
+import type { RealtimeBus } from "@/server/realtime/bus";
 
 const SOCKET_SERVER_URL = process.env.SOCKET_SERVER_URL ?? "http://localhost:3001";
 const SOCKET_INTERNAL_SECRET = process.env.SOCKET_INTERNAL_SECRET;
+const REDIS_URL = process.env.REDIS_URL;
 
-/** Fire-and-forget push to the socket server so already-open tabs update live instead of waiting
- * for a manual refresh - the triggering mutation (approval, application, payment, etc.) must
- * still succeed even if the socket server is down or unconfigured, so this never throws. */
-/** Drops every live socket of a user (ban, password change/reset). Their reconnect then fails:
- * the socket server re-checks the account and the session that would mint a new socket token is
- * gone. Fire-and-forget, like emitRealtime. */
+const globalForRealtime = globalThis as unknown as { realtimeEmitter?: Emitter };
+
+/**
+ * With REDIS_URL set, events go straight onto Redis and every socket server node picks them up
+ * through its Redis adapter (socket-server/redis.ts) - no HTTP hop, and it works with any number
+ * of nodes. One client per server process, kept on globalThis so dev hot reloads don't leak them.
+ */
+function getEmitter() {
+  if (!REDIS_URL) return null;
+  if (!globalForRealtime.realtimeEmitter) {
+    const client = new Redis(REDIS_URL, { maxRetriesPerRequest: 2 });
+    client.on("error", (err) => console.error("Realtime Redis error:", err.message));
+    // The emitter only ever calls publish. A failed publish is swallowed: a missed live update must
+    // never fail the mutation that caused it - clients catch up on their next sync or page load.
+    const publisher = {
+      publish: (channel: string, message: string | Buffer) => client.publish(channel, message).catch(() => 0),
+    };
+    globalForRealtime.realtimeEmitter = new Emitter(publisher);
+  }
+  return globalForRealtime.realtimeEmitter;
+}
+
+/** Without Redis: the single socket server's guarded HTTP bridge (socket-server/index.ts). */
+function postToSocketServer(path: string, body: unknown) {
+  if (!SOCKET_INTERNAL_SECRET) return;
+  fetch(`${SOCKET_SERVER_URL}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "x-internal-secret": SOCKET_INTERNAL_SECRET },
+    body: JSON.stringify(body),
+  }).catch(() => {});
+}
+
+/** Fire-and-forget push to already-open tabs, so they update live instead of on a manual refresh.
+ * The triggering mutation (approval, payment, message...) must succeed even if realtime is down
+ * or unconfigured, so this never throws. */
+export function emitRealtime(room: string | string[], event: string, payload?: unknown) {
+  const emitter = getEmitter();
+  if (emitter) {
+    emitter.to(room).emit(event, payload);
+    return;
+  }
+  for (const target of Array.isArray(room) ? room : [room]) postToSocketServer("/internal/emit", { room: target, event, payload });
+}
+
+/** Drops every live socket of a user (ban, password change/reset, role change). Their reconnect
+ * then re-authenticates: the socket server re-checks the account. Fire-and-forget, like emitRealtime. */
 export function disconnectUserSockets(userId: string) {
-  if (!SOCKET_INTERNAL_SECRET) return;
-
-  fetch(`${SOCKET_SERVER_URL}/internal/disconnect`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-internal-secret": SOCKET_INTERNAL_SECRET },
-    body: JSON.stringify({ userId }),
-  }).catch(() => {});
+  const emitter = getEmitter();
+  if (emitter) {
+    emitter.in(`user:${userId}`).disconnectSockets(true);
+    return;
+  }
+  postToSocketServer("/internal/disconnect", { userId });
 }
 
-export function emitRealtime(room: string, event: string, payload?: unknown) {
-  if (!SOCKET_INTERNAL_SECRET) return;
-
-  fetch(`${SOCKET_SERVER_URL}/internal/emit`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-internal-secret": SOCKET_INTERNAL_SECRET },
-    body: JSON.stringify({ room, event, payload }),
-  }).catch(() => {});
+/** Takes all of a user's sockets out of a room - a course channel they lost access to. */
+export function removeUserFromRoom(userId: string, room: string) {
+  const emitter = getEmitter();
+  if (emitter) {
+    emitter.in(`user:${userId}`).socketsLeave(room);
+    return;
+  }
+  postToSocketServer("/internal/leave", { userId, room });
 }
+
+/** Tells every socket node to drop its cached permissions for a user ("*" for everyone). */
+export function invalidateUserAccess(userId: string) {
+  const emitter = getEmitter();
+  if (emitter) {
+    emitter.serverSideEmit("chat:invalidate", userId);
+    return;
+  }
+  postToSocketServer("/internal/invalidate", { userId });
+}
+
+/** The web app's RealtimeBus, for the shared chat module (src/server/chat). */
+export const realtimeBus: RealtimeBus = {
+  emit: emitRealtime,
+  disconnectUser: disconnectUserSockets,
+  removeUserFromRoom,
+  invalidateUser: invalidateUserAccess,
+};

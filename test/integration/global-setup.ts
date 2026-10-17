@@ -9,6 +9,8 @@ import type { TestProject } from "vitest/node";
 declare module "vitest" {
   export interface ProvidedContext {
     databaseUrl: string;
+    /** Null when no Redis could be found or started: the real-time suites skip themselves. */
+    redisUrl: string | null;
   }
 }
 
@@ -21,6 +23,25 @@ function freePort() {
       server.close(() => resolve(port));
     });
   });
+}
+
+/**
+ * Redis for the real-time suites: TEST_REDIS_URL (CI's service container, or your own), else a
+ * throwaway redis-memory-server (Memurai on Windows, redis-server elsewhere - downloaded once into
+ * node_modules/.cache). The suites flush it, so never point TEST_REDIS_URL at a Redis you need.
+ */
+async function startRedis(): Promise<{ url: string; stop: () => Promise<void> }> {
+  const configured = process.env.TEST_REDIS_URL;
+  if (configured) return { url: configured, stop: async () => {} };
+  const { RedisMemoryServer } = await import("redis-memory-server");
+  const server = new RedisMemoryServer();
+  const url = `redis://${await server.getHost()}:${await server.getPort()}`;
+  return {
+    url,
+    stop: async () => {
+      await server.stop();
+    },
+  };
 }
 
 /**
@@ -57,7 +78,16 @@ export default async function setup(project: TestProject) {
   });
   project.provide("databaseUrl", databaseUrl);
 
+  let redis: { url: string; stop: () => Promise<void> } | null = null;
+  try {
+    redis = await startRedis();
+  } catch (err) {
+    console.warn("[integration] No Redis available - the real-time suites will be skipped:", err instanceof Error ? err.message : err);
+  }
+  project.provide("redisUrl", redis?.url ?? null);
+
   return async () => {
+    await redis?.stop();
     await pg.stop();
     fs.rmSync(dataDir, { recursive: true, force: true });
   };

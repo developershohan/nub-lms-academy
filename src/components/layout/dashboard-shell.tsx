@@ -26,8 +26,10 @@ import { ThemeToggle } from "@/components/theme/theme-toggle";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { NotificationBell } from "@/components/notifications/notification-bell";
+import { ChatUnreadBadge } from "@/components/chat/chat-unread-badge";
 import { UserMenu } from "@/components/layout/user-menu";
 import { isUnder } from "@/lib/role-home";
+import type { PushedNotification } from "@/server/notifications/notify";
 import { cn } from "@/lib/utils";
 
 // Layouts are server components, so they name an icon rather than pass the component itself.
@@ -56,14 +58,7 @@ export type DashboardNavItem = {
   activeFor?: string[];
 };
 
-type NotificationItem = {
-  id: string;
-  title: string;
-  body: string | null;
-  link: string | null;
-  status: "UNREAD" | "READ";
-  createdAt: string;
-};
+type NotificationItem = PushedNotification;
 
 type ShellUser = {
   name: string | null;
@@ -89,6 +84,7 @@ export function DashboardShell({
 }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const messagesHref = navItems.find((item) => item.icon === "messages")?.href;
 
   return (
     <div className="flex min-h-screen w-full">
@@ -124,6 +120,7 @@ export function DashboardShell({
           </Link>
 
           <div className="ml-auto flex items-center gap-1">
+            {messagesHref && <ChatUnreadBadge href={messagesHref} />}
             <NotificationBell initialNotifications={notifications} initialUnreadCount={unreadCount} />
             <ThemeToggle />
             <UserMenu name={user.name} email={user.email} image={user.image} roles={user.roles} />

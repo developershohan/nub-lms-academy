@@ -69,3 +69,23 @@ export function sendPasswordResetEmail(to: string, resetUrl: string) {
     ),
   });
 }
+
+const escapeHtml = (text: string) =>
+  text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
+
+/** A notification the user asked to get by email (see /notifications/preferences). Title and body
+ * can carry user-written text (a course title, a reviewer's name), so they are escaped. */
+export function sendNotificationEmail(to: string, notification: { title: string; body: string | null; link: string | null }) {
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  const link = notification.link?.startsWith("/") ? `${appUrl}${notification.link}` : null;
+  return sendEmail({
+    to,
+    subject: `${notification.title} - NUB Academy`,
+    html: layout(
+      escapeHtml(notification.title),
+      `${notification.body ? `<p>${escapeHtml(notification.body)}</p>` : ""}
+       ${link ? button(link, "Open NUB Academy") : ""}
+       <p style="color: #888; font-size: 13px;">Choose which emails you get at ${appUrl}/notifications/preferences</p>`
+    ),
+  });
+}
