@@ -11,6 +11,7 @@ import {
   canStartDirect,
   getChatUser,
   isStaff,
+  postingPausedReason,
   resolveAccess,
   type BlockState,
   type ChatUser,
@@ -234,7 +235,7 @@ function summarizeForUser(row: SummaryRow, viewer: ChatUser, blocks: Map<string,
     else if (blocked === "by_them") postingBlockedReason = "You can't reply to this conversation.";
   } else if (row.type === "COURSE_GROUP") {
     if (row.announcementOnly && !moderatorRole && !staff) postingBlockedReason = "Only instructors post in #announcements.";
-    else if (timedOut && !moderatorRole && !staff) postingBlockedReason = `A moderator paused your posting until ${mine!.postingBlockedUntil!.toLocaleString()}.`;
+    else if (timedOut && !moderatorRole && !staff) postingBlockedReason = postingPausedReason(mine!.postingBlockedUntil!);
   }
 
   return {
@@ -531,6 +532,10 @@ export async function resolveMessageReport(actorId: string, reportId: string, ac
 
 /** Unread per conversation, which of them are muted, and the total (muted ones don't count). */
 export async function unreadSummary(userId: string) {
+  // The header badge loads on every dashboard page, often before the inbox is ever opened: join
+  // any course channels this user gained access to (enrolled before channels existed, or through a
+  // path that didn't sync), so their unread counts show up. At most once a minute per user.
+  await reconcileCourseGroupsThrottled(realtimeBus, userId);
   const rows = await prisma.conversationParticipant.findMany({
     where: { userId, removedAt: null },
     select: { conversationId: true, lastReadSeq: true, mutedUntil: true, conversation: { select: { lastSeq: true } } },

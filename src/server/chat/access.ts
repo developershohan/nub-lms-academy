@@ -15,6 +15,13 @@ export type BlockState = "none" | "by_me" | "by_them";
 
 export const isStaff = (user: Pick<ChatUser, "roleNames">) => user.roleNames.some((r) => STAFF_ROLES.includes(r));
 
+/** Relative on purpose: the server's clock and locale (UTC on a host) aren't the reader's. */
+export function postingPausedReason(until: Date, now = Date.now()) {
+  const minutes = Math.max(1, Math.ceil((until.getTime() - now) / 60_000));
+  const left = minutes < 90 ? `${minutes} more minute${minutes === 1 ? "" : "s"}` : `about ${Math.round(minutes / 60)} more hours`;
+  return `A moderator paused your posting for ${left}.`;
+}
+
 /** Re-reads status and roles from the database: a banned or demoted user must not keep chatting. */
 export async function getChatUser(userId: string): Promise<ChatUser | null> {
   const user = await prisma.user.findUnique({
@@ -175,7 +182,7 @@ export async function resolveAccess(user: ChatUser, conversationId: string): Pro
   let postingBlockedReason: string | null = null;
   if (conversation.announcementOnly && !moderator) postingBlockedReason = "Only instructors post in #announcements.";
   else if (active?.postingBlockedUntil && active.postingBlockedUntil.getTime() > Date.now() && !moderator) {
-    postingBlockedReason = `A moderator paused your posting until ${active.postingBlockedUntil.toLocaleString()}.`;
+    postingBlockedReason = postingPausedReason(active.postingBlockedUntil);
   }
   return {
     ...base,

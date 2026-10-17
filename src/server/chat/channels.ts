@@ -7,7 +7,7 @@
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import { rooms, type RealtimeBus } from "@/server/realtime/bus";
-import { courseGroupRole, isStaff, type ChatUser, type ParticipantRole } from "./access";
+import { courseGroupRole, isStaff, postingPausedReason, type ChatUser, type ParticipantRole } from "./access";
 import { findOrCreateConversation } from "./messages";
 
 export type ChannelKind = "GENERAL" | "ANNOUNCEMENTS" | "QA" | "BATCH";
@@ -146,7 +146,7 @@ export async function timeoutMember(bus: RealtimeBus, user: ChatUser, conversati
   bus.emit(rooms.user(userId), "conversation:updated", {
     conversationId,
     canPost: !until,
-    postingBlockedReason: until ? `A moderator paused your posting until ${until.toLocaleString()}.` : null,
+    postingBlockedReason: until ? postingPausedReason(until) : null,
   });
   await logAudit(user.id, until ? "channel:timeout" : "channel:timeout-lift", "Conversation", conversationId, { userId });
   return { ok: true } as const;
