@@ -13,12 +13,19 @@ vi.mock("@/server/services/notification-service", () => ({ createNotifications: 
 vi.mock("@/lib/audit", () => ({ logAudit: vi.fn() }));
 
 import { prisma as prismaClient } from "@/lib/prisma";
-import { getConversationParticipants, listMessages } from "./chat-service";
+import { canModerateChat } from "@/lib/permissions";
+import { getConversationParticipants, listConversationSummariesForUser, listMessages } from "./chat-service";
 
 const prisma = prismaClient as unknown as PrismaMock;
 const message = (n: number) => ({ id: `m${n}`, content: `message ${n}` });
 
-beforeEach(() => prisma.$reset());
+const canModerate = canModerateChat as unknown as ReturnType<typeof vi.fn>;
+const removed = { id: "m2", content: "something abusive", deletedAt: new Date() };
+
+beforeEach(() => {
+  prisma.$reset();
+  canModerate.mockResolvedValue(false);
+});
 
 describe("listMessages", () => {
   it("returns the newest page in display order, not the oldest", async () => {
@@ -44,6 +51,43 @@ describe("listMessages", () => {
 
     expect(prisma.message.findMany).toHaveBeenCalledWith(expect.objectContaining({ cursor: { id: "m4" }, skip: 1 }));
     expect(result).toMatchObject({ ok: true, hasMore: false, messages: [message(1), message(2), message(3)] });
+  });
+});
+
+describe("removed messages", () => {
+  it("blanks a removed message's text for regular participants", async () => {
+    prisma.message.findMany.mockResolvedValue([removed, { ...message(1), deletedAt: null }]);
+
+    const result = await listMessages("student-1", "c1");
+
+    expect(result).toMatchObject({
+      messages: [{ id: "m1", content: "message 1" }, { id: "m2", content: "", deletedAt: removed.deletedAt }],
+    });
+  });
+
+  it("keeps the original text for chat moderators", async () => {
+    canModerate.mockResolvedValue(true);
+    prisma.message.findMany.mockResolvedValue([removed]);
+
+    const result = await listMessages("support-1", "c1");
+
+    expect(result).toMatchObject({ messages: [{ id: "m2", content: "something abusive" }] });
+  });
+
+  it("doesn't use a removed message as the conversation preview", async () => {
+    prisma.conversation.findMany.mockResolvedValue([
+      {
+        id: "c1",
+        type: "COURSE_GROUP",
+        course: { id: "course-1", title: "Intro to Web" },
+        participants: [],
+        messages: [{ ...removed, senderId: "student-2", createdAt: new Date() }],
+      },
+    ]);
+
+    const [summary] = await listConversationSummariesForUser("student-1");
+
+    expect(summary.lastMessage).toBe("Message removed");
   });
 });
 
