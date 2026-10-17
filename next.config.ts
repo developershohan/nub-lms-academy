@@ -6,6 +6,9 @@ const isDev = process.env.NODE_ENV === "development";
 // XHR calls to it (polling transport, see src/hooks/use-socket.ts) need an explicit connect-src
 // allowance, or CSP blocks the realtime connection entirely.
 const socketOrigin = process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:3001";
+// The WebSocket transport connects to ws(s)://, which an http(s):// source doesn't cover in CSP -
+// without this the browser blocks the WebSocket and Socket.IO quietly falls back to polling.
+const socketWsOrigin = socketOrigin.replace(/^http/, "ws");
 
 // No nonce-based CSP here deliberately: this app has no proxy-level nonce plumbing today, and
 // adopting one would force every page into dynamic rendering (see the Next.js CSP guide under
@@ -23,7 +26,7 @@ const cspDirectives = [
   "font-src 'self' data:",
   // Course video embeds (src/lib/video-embed.ts) render as iframes from these two hosts only.
   "frame-src 'self' https://www.youtube.com https://player.vimeo.com",
-  `connect-src 'self' ${socketOrigin}`,
+  `connect-src 'self' ${socketOrigin} ${socketWsOrigin}`,
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",

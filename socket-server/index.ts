@@ -3,6 +3,7 @@ import http, { type IncomingMessage } from "node:http";
 import { Server } from "socket.io";
 import { authenticateSocket } from "./auth";
 import { registerChatEvents, clearRateLimit } from "./events/chat.events";
+import { createRedisAdapter } from "./redis";
 
 const REQUIRED_IN_PRODUCTION = ["AUTH_SECRET", "DATABASE_URL", "SOCKET_CORS_ORIGIN"] as const;
 
@@ -26,6 +27,10 @@ const CORS_ORIGINS = (process.env.SOCKET_CORS_ORIGIN ?? "http://localhost:3000")
   .map((origin) => origin.trim().replace(/\/$/, ""))
   .filter(Boolean);
 const INTERNAL_SECRET = process.env.SOCKET_INTERNAL_SECRET;
+// Set it to run more than one node, or to let Next.js publish straight to Redis instead of the
+// /internal/* HTTP bridge below (see src/lib/realtime.ts). Locally: `docker compose up -d redis`.
+const REDIS_URL = process.env.REDIS_URL;
+const redis = REDIS_URL ? createRedisAdapter(REDIS_URL) : null;
 
 const ENGINE_IO_ERROR_LABELS: Record<number, string> = {
   0: "Transport unknown",
@@ -92,7 +97,12 @@ const httpServer = http.createServer((req, res) => {
 
   if (req.url === "/health") {
     res.writeHead(200, { "Content-Type": "application/json" }).end(
-      JSON.stringify({ status: "ok", service: "socket-server" })
+      JSON.stringify({
+        status: "ok",
+        service: "socket-server",
+        adapter: redis ? "redis" : "memory",
+        redis: redis ? redis.pubClient.status : undefined,
+      })
     );
     return;
   }
@@ -106,6 +116,7 @@ const httpServer = http.createServer((req, res) => {
 
 const io = new Server(httpServer, {
   cors: { origin: CORS_ORIGINS, credentials: true },
+  ...(redis ? { adapter: redis.adapter } : {}),
 });
 
 // Handshake-level failures (bad/unknown session, unsupported protocol, malformed request) never
@@ -159,7 +170,12 @@ io.on("connection", (socket) => {
 // scanner never sees the app come up and the deploy gets stuck (502s forever even though the
 // process is actually running fine).
 httpServer.listen(PORT, "0.0.0.0");
-console.log(`Socket.IO chat server listening on :${PORT} (CORS origins: ${CORS_ORIGINS.join(", ")})`);
+console.log(
+  `Socket.IO chat server listening on :${PORT} (CORS origins: ${CORS_ORIGINS.join(", ")}; adapter: ${redis ? "redis" : "memory"})`
+);
+if (!redis && process.env.NODE_ENV === "production") {
+  console.warn("REDIS_URL is not set - running as a single node; scale-out and the Redis emitter are off.");
+}
 if (!INTERNAL_SECRET) {
   console.warn("SOCKET_INTERNAL_SECRET is not set - /internal/emit will reject every request until it is.");
 }

@@ -145,6 +145,9 @@ NEXT_PUBLIC_SOCKET_URL="http://localhost:3001"
 SOCKET_SERVER_URL="http://localhost:3001"
 SOCKET_PORT="3001"
 SOCKET_CORS_ORIGIN="http://localhost:3000"
+
+# Optional locally: start Redis with `docker compose up -d redis`, then uncomment.
+# REDIS_URL="redis://localhost:6379"
 ```
 
 Generate strong local secrets with Node.js:
@@ -165,7 +168,15 @@ npx prisma db seed
 
 Seeding creates roles, demonstration teachers, categories, and published courses. If `ADMIN_EMAIL` is set and no matching user exists, the command creates a super-administrator and prints a temporary password once. Store it securely and change it after signing in.
 
-### 4. Start both services
+### 4. Start Redis (optional)
+
+Real-time features run without Redis: the socket server is then a single node and the web app reaches it over a guarded HTTP bridge. To run them the way production does, start Redis and set `REDIS_URL` in `.env`:
+
+```bash
+docker compose up -d redis
+```
+
+### 5. Start both services
 
 Terminal one:
 
@@ -189,6 +200,7 @@ Open [http://localhost:3000](http://localhost:3000). The socket server listens o
 | `AUTH_SECRET` | Both services | Yes | Signs Auth.js sessions and socket tokens |
 | `NEXTAUTH_SECRET` | Next.js | Yes | Compatibility alias; keep equal to `AUTH_SECRET` |
 | `SOCKET_INTERNAL_SECRET` | Both services | Yes | Protects server-to-server real-time event requests |
+| `REDIS_URL` | Both services | Yes in production | Socket.IO Redis adapter (several socket nodes) and the emitter the web app publishes events through |
 | `NEXT_PUBLIC_APP_URL` | Browser/Next.js | Yes | Public URL of the web application |
 | `AUTH_URL`, `NEXTAUTH_URL` | Next.js | Yes | Authentication callback base URL |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Next.js | Optional | Google OAuth credentials |
@@ -291,7 +303,9 @@ Deploy the same repository to Render, Railway, Fly.io, or another host that supp
 
 - Start command: `npm run start:socket`
 - Health endpoint: `GET /health`
+- Run it on an always-on instance: free instances sleep after 15 minutes idle, which breaks instant chat and notifications.
 - Set `DATABASE_URL`, `AUTH_SECRET`, and `SOCKET_INTERNAL_SECRET` to the same values used by the Next.js deployment.
+- Add a Redis-compatible store (on Render, a Key Value instance in the same region) and set its internal `REDIS_URL` on both the socket service and the web app.
 - Set `SOCKET_CORS_ORIGIN` to the exact public web origin. Use commas for multiple origins.
 - Set `NEXT_PUBLIC_SOCKET_URL` and `SOCKET_SERVER_URL` in the web deployment to the public socket-service URL.
 

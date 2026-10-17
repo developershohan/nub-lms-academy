@@ -1,0 +1,23 @@
+# Local services for development. Start Redis with:
+#   docker compose up -d redis
+# then set REDIS_URL=redis://localhost:6379 for both the Next.js app and the socket server.
+# Without REDIS_URL both still run: the socket server stays single-node and Next.js reaches it
+# over the old HTTP bridge (see src/lib/realtime.ts).
+services:
+  redis:
+    image: redis:7.4-alpine
+    # Append-only file so queued state survives a container restart; no password locally.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  redis-data:
