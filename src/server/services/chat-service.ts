@@ -1,20 +1,40 @@
 import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
-import { canAccessConversation, canAccessCourse, canManageCourse, canModerateChat } from "@/lib/permissions";
+import { canAccessCourse, canManageCourse, canModerateChat } from "@/lib/permissions";
 import { notify } from "@/server/services/notification-service";
 import { logAudit } from "@/lib/audit";
-import { emitRealtime } from "@/lib/realtime";
+import { emitRealtime, realtimeBus } from "@/lib/realtime";
+import { rooms } from "@/server/realtime/bus";
+import {
+  blockStateBetween,
+  canStartDirect,
+  getChatUser,
+  isStaff,
+  resolveAccess,
+  type BlockState,
+  type ChatUser,
+  type ParticipantRole,
+} from "@/server/chat/access";
+import { ensureCourseChannels, type ChannelKind } from "@/server/chat/channels";
+import { reconcileCourseGroupsThrottled } from "@/server/chat/membership";
 import {
   directKey,
+  editChatMessage,
   findOrCreateConversation,
+  latestPreview,
   listMessagePage,
   listMessagesAfter,
   markChatRead,
+  memberIds,
   messagePreview,
   notifyAboutMessage,
+  removeChatMessage,
   sendChatMessage,
+  toggleReaction,
 } from "@/server/chat/messages";
+import { blockUser, reportMessage as fileReport, resolveReport, unblockUser } from "@/server/chat/safety";
+import { ensureTicket, serializeTicket, TICKET_INCLUDE, updateTicket, type TicketWire } from "@/server/chat/support";
 import type { RoleName } from "@/generated/prisma/client";
 
 function revalidateChatPaths() {
@@ -23,65 +43,22 @@ function revalidateChatPaths() {
   revalidatePath("/admin/messages");
 }
 
-const STAFF_ROLES = ["ADMIN", "SUPER_ADMIN", "SUPPORT"] as const;
-const isStaffRoleList = (roles: RoleName[]) => roles.some((r) => (STAFF_ROLES as readonly RoleName[]).includes(r));
+/** The signed-in user as chat sees them - status and roles re-read from the database. */
+export async function chatUserFor(userId: string): Promise<ChatUser | null> {
+  return getChatUser(userId);
+}
 
 /**
  * A DIRECT conversation may be started when either side is staff (admin/support can message
- * anyone, and anyone can reach staff - this is the "admin can chat with anyone" / support-contact
- * path), or the two accounts are connected through a course: teacher <-> their student,
- * classmate <-> classmate sharing an active enrollment, or sub-instructor <-> the owning teacher
- * / that course's enrolled students. Otherwise students/teachers could message arbitrary
- * strangers on the platform.
+ * anyone, and anyone can reach staff), or the two accounts are connected through a course:
+ * teacher <-> their student, classmate <-> classmate sharing an active enrollment, or
+ * co-instructor <-> the owning teacher / that course's enrolled students (see canStartDirect).
  */
 export async function startDirectConversation(userId: string, otherUserId: string) {
-  if (userId === otherUserId) return { error: "Cannot message yourself" } as const;
-
-  const [caller, other] = await Promise.all([
-    prisma.user.findUnique({ where: { id: userId }, include: { roles: { include: { role: true } } } }),
-    prisma.user.findUnique({ where: { id: otherUserId }, include: { roles: { include: { role: true } } } }),
-  ]);
-  if (!other || other.status !== "ACTIVE") return { error: "User not found" } as const;
-
-  let allowed =
-    isStaffRoleList((caller?.roles ?? []).map((r) => r.role.name)) ||
-    isStaffRoleList(other.roles.map((r) => r.role.name));
-
-  if (!allowed) {
-    const sharedEnrollment = await prisma.enrollment.findFirst({
-      where: {
-        status: "ACTIVE",
-        OR: [
-          // teacher <-> their student, either direction
-          { userId, course: { teacherId: otherUserId } },
-          { userId: otherUserId, course: { teacherId: userId } },
-          // classmate <-> classmate: both actively enrolled in the same course
-          { userId, course: { enrollments: { some: { userId: otherUserId, status: "ACTIVE" } } } },
-        ],
-      },
-    });
-    allowed = !!sharedEnrollment;
-  }
-
-  if (!allowed) {
-    const sharedViaSubInstructor = await prisma.courseInstructor.findFirst({
-      where: {
-        OR: [
-          // caller is the owning teacher, other is a sub-instructor on caller's course
-          { userId: otherUserId, course: { teacherId: userId } },
-          // other is the owning teacher, caller is a sub-instructor on their course
-          { userId, course: { teacherId: otherUserId } },
-          // caller is sub-instructor, other is a student actively enrolled in that course
-          { userId, course: { enrollments: { some: { userId: otherUserId, status: "ACTIVE" } } } },
-          // other is sub-instructor, caller is a student actively enrolled in that course
-          { userId: otherUserId, course: { enrollments: { some: { userId, status: "ACTIVE" } } } },
-        ],
-      },
-    });
-    allowed = !!sharedViaSubInstructor;
-  }
-
-  if (!allowed) return { error: "You can only message people connected to your courses" } as const;
+  const user = await getChatUser(userId);
+  if (!user) return { error: "Not found" } as const;
+  const allowed = await canStartDirect(user, otherUserId);
+  if ("error" in allowed) return { error: allowed.error } as const;
 
   const uniqueKey = directKey(userId, otherUserId);
   const conversation = await findOrCreateConversation(uniqueKey, () =>
@@ -124,56 +101,67 @@ export function searchUsersToMessage(
   });
 }
 
+/** One support thread per customer ("support:<userId>"), with its ticket. */
 export async function startSupportConversation(userId: string) {
   const uniqueKey = `support:${userId}`;
   const conversation = await findOrCreateConversation(uniqueKey, () =>
-    prisma.conversation.create({ data: { type: "SUPPORT", uniqueKey, participants: { create: [{ userId }] } } })
+    prisma.conversation.create({
+      data: { type: "SUPPORT", uniqueKey, participants: { create: [{ userId, role: "OWNER" }] }, supportTicket: { create: { requesterId: userId } } },
+    })
   );
+  if (!conversation.created) await prisma.$transaction((tx) => ensureTicket(tx, conversation.id));
   if (conversation.created) revalidateChatPaths();
   return { ok: true, conversationId: conversation.id } as const;
 }
 
-/** Participants are added lazily on first visit rather than backfilled on enrollment - access to
- * the room itself is derived live from canAccessCourse/canManageCourse (see permissions.ts), so a
- * participant row here only exists to track per-user lastReadAt. */
-export async function getOrCreateCourseGroupConversation(userId: string, courseId: string) {
+/**
+ * Opens a course community channel (#general by default). Access is derived live from the
+ * course (canAccessCourse / canManageCourse); the participant row carries the member's role and
+ * read position. Opening the course also makes sure its standard channels exist.
+ */
+export async function getOrCreateCourseGroupConversation(userId: string, courseId: string, channel: ChannelKind = "GENERAL") {
   const allowed = (await canManageCourse(userId, courseId)) || (await canAccessCourse(userId, courseId));
   if (!allowed) return { error: "Forbidden" } as const;
 
-  const uniqueKey = `course:${courseId}`;
-  const conversation = await findOrCreateConversation(uniqueKey, () =>
-    prisma.conversation.create({ data: { type: "COURSE_GROUP", courseId, uniqueKey } })
-  );
-  await prisma.conversationParticipant.upsert({
-    where: { conversationId_userId: { conversationId: conversation.id, userId } },
-    create: { conversationId: conversation.id, userId },
-    update: {},
-  });
-  return { ok: true, conversationId: conversation.id } as const;
+  const channels = await ensureCourseChannels(courseId);
+  const target = channels.find((c) => c.channel === channel) ?? channels[0];
+  const user = await getChatUser(userId);
+  if (!user) return { error: "Forbidden" } as const;
+  const access = await resolveAccess(user, target.id);
+  if (!access.ok) return { error: "Forbidden" } as const;
+  if (access.role) {
+    await prisma.conversationParticipant.upsert({
+      where: { conversationId_userId: { conversationId: target.id, userId } },
+      create: { conversationId: target.id, userId, role: access.role },
+      update: { removedAt: null, role: access.role },
+    });
+  }
+  return { ok: true, conversationId: target.id } as const;
 }
 
-/** Most recent activity first. */
-export function listConversationsForUser(userId: string) {
+const SUMMARY_INCLUDE = {
+  course: { select: { id: true, title: true } },
+  participants: { where: { removedAt: null }, include: { user: { select: { id: true, name: true, email: true } } } },
+  messages: { orderBy: { seq: "desc" as const }, take: 1 },
+  supportTicket: { include: TICKET_INCLUDE },
+};
+
+/** Most recent activity first, minus channels the user was removed from. Joins any course channels they gained access to. */
+export async function listConversationsForUser(userId: string) {
+  await reconcileCourseGroupsThrottled(realtimeBus, userId);
   return prisma.conversation.findMany({
-    where: { participants: { some: { userId } } },
-    include: {
-      course: { select: { id: true, title: true } },
-      participants: { include: { user: { select: { id: true, name: true, email: true } } } },
-      messages: { orderBy: { seq: "desc" }, take: 1 },
-    },
+    where: { participants: { some: { userId, removedAt: null } } },
+    include: SUMMARY_INCLUDE,
     orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
   });
 }
 
 /** Moderation/reply queue for support staff - every SUPPORT conversation, not just ones they've
- * personally joined (canAccessConversation already grants moderators blanket read access). */
+ * personally joined (staff get blanket read access from resolveAccess). */
 export function listSupportConversationsForAdmin() {
   return prisma.conversation.findMany({
     where: { type: "SUPPORT" },
-    include: {
-      participants: { include: { user: { select: { id: true, name: true, email: true } } } },
-      messages: { orderBy: { seq: "desc" }, take: 1 },
-    },
+    include: SUMMARY_INCLUDE,
     orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
   });
 }
@@ -189,55 +177,132 @@ export type ConversationSummary = {
   lastSeq: number;
   /** For a DM, the other member - the inbox shows whether they're online. */
   otherUserId: string | null;
+  /** Course community channels: which one, and of which course. */
+  courseId: string | null;
+  courseTitle: string | null;
+  channel: ChannelKind | null;
+  /** The viewer's role; null when staff look at a thread they aren't a member of. */
+  role: ParticipantRole | null;
+  mutedUntil: string | null;
+  blocked: BlockState;
+  canPost: boolean;
+  postingBlockedReason: string | null;
+  canModerate: boolean;
+  slowModeSec: number;
+  pinnedMessageId: string | null;
+  ticket: TicketWire | null;
 };
 
-function summarizeForUser(
-  conversation: Awaited<ReturnType<typeof listConversationsForUser>>[number],
-  currentUserId: string
-): ConversationSummary {
-  const other = conversation.participants.find((p) => p.userId !== currentUserId);
+type SummaryRow = Awaited<ReturnType<typeof listConversationsForUser>>[number];
+
+function channelLabel(row: SummaryRow) {
+  const course = row.course?.title ?? "Course chat";
+  switch (row.channel) {
+    case "ANNOUNCEMENTS":
+      return `${course} · #announcements`;
+    case "QA":
+      return `${course} · #q-and-a`;
+    case "BATCH":
+      return `${course} · ${row.title ?? "Batch"}`;
+    default:
+      return course;
+  }
+}
+
+function summarizeForUser(row: SummaryRow, viewer: ChatUser, blocks: Map<string, BlockState>): ConversationSummary {
+  const other = row.participants.find((p) => p.userId !== viewer.id);
+  const mine = row.participants.find((p) => p.userId === viewer.id) ?? null;
+  const ticket = row.supportTicket ? serializeTicket(row.supportTicket) : null;
+  const isRequester = !!ticket && ticket.requester.id === viewer.id;
   const label =
-    conversation.type === "COURSE_GROUP"
-      ? (conversation.course?.title ?? "Course chat")
-      : conversation.type === "SUPPORT"
-        ? "Support"
-        : (other?.user.name ?? other?.user.email ?? "Direct message");
-  const last = conversation.messages[0];
-  const mine = conversation.participants.find((p) => p.userId === currentUserId);
+    row.type === "COURSE_GROUP"
+      ? channelLabel(row)
+      : row.type === "SUPPORT"
+        ? isRequester
+          ? "Support"
+          : (ticket?.requester.name ?? other?.user.name ?? "Support request")
+        : (other?.user.name ?? "Direct message");
+  const last = row.messages[0];
+  const staff = isStaff(viewer);
+  const blocked = row.type === "DIRECT" && other ? (blocks.get(other.userId) ?? "none") : "none";
+  const moderatorRole = mine?.role === "OWNER" || mine?.role === "MODERATOR";
+  const timedOut = !!mine?.postingBlockedUntil && mine.postingBlockedUntil.getTime() > Date.now();
+  let postingBlockedReason: string | null = null;
+  if (row.type === "DIRECT") {
+    if (!mine) postingBlockedReason = "Staff can read this conversation but not post in it.";
+    else if (blocked === "by_me") postingBlockedReason = "You blocked this person. Unblock them to send messages.";
+    else if (blocked === "by_them") postingBlockedReason = "You can't reply to this conversation.";
+  } else if (row.type === "COURSE_GROUP") {
+    if (row.announcementOnly && !moderatorRole && !staff) postingBlockedReason = "Only instructors post in #announcements.";
+    else if (timedOut && !moderatorRole && !staff) postingBlockedReason = `A moderator paused your posting until ${mine!.postingBlockedUntil!.toLocaleString()}.`;
+  }
 
   return {
-    id: conversation.id,
-    type: conversation.type,
+    id: row.id,
+    type: row.type,
     label,
     lastMessage: last ? messagePreview(last) : null,
     lastMessageAt: last ? last.createdAt.toISOString() : null,
-    unread: Math.max(0, conversation.lastSeq - (mine?.lastReadSeq ?? 0)),
-    lastSeq: conversation.lastSeq,
-    otherUserId: conversation.type === "DIRECT" ? (other?.userId ?? null) : null,
+    unread: mine ? Math.max(0, row.lastSeq - mine.lastReadSeq) : 0,
+    lastSeq: row.lastSeq,
+    otherUserId: row.type === "DIRECT" ? (other?.userId ?? null) : null,
+    courseId: row.courseId,
+    courseTitle: row.course?.title ?? null,
+    channel: row.channel,
+    role: mine?.role ?? null,
+    mutedUntil: mine?.mutedUntil?.toISOString() ?? null,
+    blocked,
+    canPost: postingBlockedReason === null,
+    postingBlockedReason,
+    canModerate: staff || (row.type === "COURSE_GROUP" && moderatorRole),
+    slowModeSec: row.slowModeSec,
+    pinnedMessageId: row.pinnedMessageId,
+    ticket,
   };
 }
 
-export async function listConversationSummariesForUser(userId: string): Promise<ConversationSummary[]> {
-  const conversations = await listConversationsForUser(userId);
-  return conversations.map((c) => summarizeForUser(c, userId));
+/** Block state against each DM partner, in one query. */
+async function blockStates(viewerId: string, otherIds: string[]) {
+  const map = new Map<string, BlockState>();
+  if (otherIds.length === 0) return map;
+  const blocks = await prisma.userBlock.findMany({
+    where: { OR: [{ blockerId: viewerId, blockedId: { in: otherIds } }, { blockedId: viewerId, blockerId: { in: otherIds } }] },
+    select: { blockerId: true, blockedId: true },
+  });
+  for (const id of otherIds) {
+    if (blocks.some((b) => b.blockerId === viewerId && b.blockedId === id)) map.set(id, "by_me");
+    else if (blocks.some((b) => b.blockerId === id)) map.set(id, "by_them");
+  }
+  return map;
 }
 
-export async function listSupportConversationSummariesForAdmin(): Promise<ConversationSummary[]> {
-  const conversations = await listSupportConversationsForAdmin();
-  return conversations.map((conversation) => {
-    const requester = conversation.participants[0];
-    const last = conversation.messages[0];
-    return {
-      id: conversation.id,
-      type: "SUPPORT" as const,
-      label: requester?.user.name ?? requester?.user.email ?? "Support request",
-      lastMessage: last ? messagePreview(last) : null,
-      lastMessageAt: last ? last.createdAt.toISOString() : null,
-      unread: 0,
-      lastSeq: conversation.lastSeq,
-      otherUserId: requester?.userId ?? null,
-    };
-  });
+async function summarizeAll(rows: SummaryRow[], viewer: ChatUser) {
+  const otherIds = rows.filter((r) => r.type === "DIRECT").flatMap((r) => r.participants.filter((p) => p.userId !== viewer.id).map((p) => p.userId));
+  const blocks = await blockStates(viewer.id, [...new Set(otherIds)]);
+  return rows.map((row) => summarizeForUser(row, viewer, blocks));
+}
+
+export async function listConversationSummariesForUser(userId: string): Promise<ConversationSummary[]> {
+  const viewer = await getChatUser(userId);
+  if (!viewer) return [];
+  return summarizeAll(await listConversationsForUser(userId), viewer);
+}
+
+export async function listSupportConversationSummariesForAdmin(viewerId: string): Promise<ConversationSummary[]> {
+  const viewer = await getChatUser(viewerId);
+  if (!viewer || !isStaff(viewer)) return [];
+  return summarizeAll(await listSupportConversationsForAdmin(), viewer);
+}
+
+/** One conversation as the viewer sees it - the inbox fetches this when a new one appears. */
+export async function getConversationSummary(userId: string, conversationId: string) {
+  const viewer = await getChatUser(userId);
+  if (!viewer) return { error: "Forbidden" } as const;
+  const access = await resolveAccess(viewer, conversationId);
+  if (!access.ok) return { error: access.reason === "not_found" ? "Not found" : "Forbidden" } as const;
+  const row = await prisma.conversation.findUniqueOrThrow({ where: { id: conversationId }, include: SUMMARY_INCLUDE });
+  const [summary] = await summarizeAll([row], viewer);
+  return { ok: true, conversation: summary } as const;
 }
 
 /**
@@ -250,8 +315,9 @@ export async function listMessages(
   conversationId: string,
   { beforeSeq, afterSeq }: { beforeSeq?: number; afterSeq?: number } = {}
 ) {
-  if (!(await canAccessConversation(userId, conversationId))) return { error: "Forbidden" } as const;
-  const moderator = await canModerateChat(userId);
+  const user = await getChatUser(userId);
+  if (!user || !(await resolveAccess(user, conversationId)).ok) return { error: "Forbidden" } as const;
+  const moderator = isStaff(user);
   if (afterSeq !== undefined) {
     const { messages, reset } = await listMessagesAfter(conversationId, afterSeq, { moderator });
     return { ok: true, messages, hasMore: false, reset } as const;
@@ -264,10 +330,14 @@ export async function listMessages(
  * Sends from Next.js (the REST API). The socket server does the same for live senders; both go
  * through sendChatMessage, so seq and clientMsgId behave identically either way.
  */
-export async function sendMessage(senderId: string, conversationId: string, content: string, clientMsgId?: string) {
-  if (!(await canAccessConversation(senderId, conversationId))) return { error: "Forbidden" } as const;
+export async function sendMessage(senderId: string, conversationId: string, content: string, clientMsgId?: string, replyToId?: string | null) {
+  const user = await getChatUser(senderId);
+  if (!user) return { error: "Forbidden" } as const;
+  const access = await resolveAccess(user, conversationId);
+  if (!access.ok) return { error: "Forbidden" } as const;
+  if (!access.canPost) return { error: access.postingBlockedReason ?? "You can't post in this conversation" } as const;
 
-  const result = await sendChatMessage({ conversationId, senderId, content, clientMsgId });
+  const result = await sendChatMessage({ conversationId, senderId, content, clientMsgId, replyToId });
   if ("error" in result) return result;
   const { message } = result;
   if (result.duplicate) return { ok: true, message } as const;
@@ -279,10 +349,15 @@ export async function sendMessage(senderId: string, conversationId: string, cont
     lastMessageAt: message.createdAt,
     preview: messagePreview(message),
     senderId,
+    ...(result.ticket ? { ticket: result.ticket } : {}),
   };
   emitRealtime(`user:${senderId}`, "conversation:updated", { ...update, unread: 0 });
   for (const { userId, unread } of result.recipients) {
     emitRealtime(`user:${userId}`, "conversation:updated", { ...update, unread });
+  }
+  if (result.conversation.type === "SUPPORT") {
+    emitRealtime(rooms.staff, "conversation:updated", update);
+    if (result.ticket) emitRealtime(rooms.staff, "ticket:updated", result.ticket);
   }
 
   // No presence here (that's the socket server's), so every other member is notified.
@@ -293,7 +368,10 @@ export async function sendMessage(senderId: string, conversationId: string, cont
 }
 
 export async function markConversationRead(userId: string, conversationId: string, seq?: number) {
-  if (!(await canAccessConversation(userId, conversationId))) return { error: "Forbidden" } as const;
+  const user = await getChatUser(userId);
+  if (!user) return { error: "Forbidden" } as const;
+  const access = await resolveAccess(user, conversationId);
+  if (!access.ok || !access.isParticipant) return { error: "Forbidden" } as const;
 
   const result = await markChatRead(conversationId, userId, seq);
   if ("error" in result) return result;
@@ -313,45 +391,163 @@ export async function markConversationRead(userId: string, conversationId: strin
 }
 
 export async function getConversationParticipants(userId: string, conversationId: string) {
-  if (!(await canAccessConversation(userId, conversationId))) return { error: "Forbidden" } as const;
+  const user = await getChatUser(userId);
+  if (!user || !(await resolveAccess(user, conversationId)).ok) return { error: "Forbidden" } as const;
 
   // No email: in a course group every enrolled student can call this, and classmates' addresses
   // aren't theirs to see.
   const participants = await prisma.conversationParticipant.findMany({
-    where: { conversationId },
-    include: { user: { select: { id: true, name: true } } },
+    where: { conversationId, removedAt: null },
+    select: { userId: true, role: true, lastReadSeq: true, user: { select: { id: true, name: true } } },
+    orderBy: [{ role: "asc" }, { createdAt: "asc" }],
+    take: 500,
   });
   return { ok: true, participants } as const;
 }
 
-/** Sender-initiated soft delete - moderation hide (hideMessage) uses the same field. */
-export async function deleteOwnMessage(userId: string, messageId: string) {
-  const message = await prisma.message.findUnique({ where: { id: messageId } });
-  if (!message || message.senderId !== userId) return { error: "Forbidden" } as const;
+/** After an edit or removal of the newest message: inbox previews need the new text. */
+async function pushPreview(conversationId: string) {
+  const preview = await latestPreview(conversationId);
+  if (!preview) return;
+  const members = await memberIds(conversationId);
+  emitRealtime(members.map((id) => `user:${id}`), "conversation:updated", preview);
+}
 
-  await prisma.message.update({ where: { id: messageId }, data: { deletedAt: new Date() } });
+/** Sender-initiated edit, from a server action (the socket does the same live). */
+export async function editOwnMessage(userId: string, messageId: string, content: string) {
+  const result = await editChatMessage({ messageId, userId, content });
+  if ("error" in result) return result;
+  emitRealtime(`conversation:${result.conversationId}`, "message:updated", result.message);
+  if (result.isLatest) await pushPreview(result.conversationId);
+  return { ok: true, message: result.message } as const;
+}
+
+/** Sender-initiated soft delete - moderation (hideMessage) uses the same field. */
+export async function deleteOwnMessage(userId: string, messageId: string) {
+  const result = await removeChatMessage({ messageId, userId });
+  if ("error" in result) return result;
+  emitRealtime(`conversation:${result.conversationId}`, "message:updated", result.message);
+  if (result.isLatest) await pushPreview(result.conversationId);
   revalidateChatPaths();
   return { ok: true } as const;
 }
 
-export async function reportMessage(userId: string, messageId: string, reason: string | undefined) {
+export async function reactToMessage(userId: string, messageId: string, emoji: string) {
+  const user = await getChatUser(userId);
+  if (!user) return { error: "Forbidden" } as const;
   const message = await prisma.message.findUnique({ where: { id: messageId }, select: { conversationId: true } });
-  if (!message || !(await canAccessConversation(userId, message.conversationId))) {
-    return { error: "Forbidden" } as const;
-  }
-
-  await prisma.message.update({
-    where: { id: messageId },
-    data: { reportedAt: new Date(), reportReason: reason ?? null },
-  });
-  return { ok: true } as const;
+  if (!message) return { error: "Not found" } as const;
+  const access = await resolveAccess(user, message.conversationId);
+  if (!access.ok || !access.canPost) return { error: "Forbidden" } as const;
+  const result = await toggleReaction({ messageId, userId, emoji });
+  if ("error" in result) return result;
+  emitRealtime(`conversation:${result.conversationId}`, "message:updated", result.message);
+  return { ok: true, message: result.message } as const;
 }
 
-export async function hideMessage(actorId: string, messageId: string) {
-  if (!(await canModerateChat(actorId))) return { error: "Forbidden" } as const;
+export async function reportMessage(userId: string, messageId: string, reason: string | undefined) {
+  const user = await getChatUser(userId);
+  if (!user) return { error: "Forbidden" } as const;
+  const message = await prisma.message.findUnique({ where: { id: messageId }, select: { conversationId: true } });
+  if (!message || !(await resolveAccess(user, message.conversationId)).ok) return { error: "Forbidden" } as const;
+  return fileReport(notify, user, messageId, reason);
+}
 
-  await prisma.message.update({ where: { id: messageId }, data: { deletedAt: new Date() } });
+/** A moderator of the conversation (course instructors there, staff anywhere) removes a message. */
+export async function hideMessage(actorId: string, messageId: string) {
+  const user = await getChatUser(actorId);
+  if (!user) return { error: "Forbidden" } as const;
+  const message = await prisma.message.findUnique({ where: { id: messageId }, select: { conversationId: true } });
+  if (!message) return { error: "Not found" } as const;
+  const access = await resolveAccess(user, message.conversationId);
+  if (!access.ok || !access.canModerate) return { error: "Forbidden" } as const;
+
+  const result = await removeChatMessage({ messageId, userId: actorId, moderator: true });
+  if ("error" in result) return result;
   await logAudit(actorId, "message:moderate", "Message", messageId);
+  emitRealtime(`conversation:${result.conversationId}`, "message:updated", result.message);
+  if (result.isLatest) await pushPreview(result.conversationId);
   revalidatePath("/admin/messages");
   return { ok: true } as const;
 }
+
+export async function blockUserForChat(userId: string, targetId: string) {
+  const user = await getChatUser(userId);
+  if (!user) return { error: "Forbidden" } as const;
+  return blockUser(realtimeBus, user, targetId);
+}
+
+export async function unblockUserForChat(userId: string, targetId: string) {
+  const user = await getChatUser(userId);
+  if (!user) return { error: "Forbidden" } as const;
+  return unblockUser(realtimeBus, user, targetId);
+}
+
+/** Mutes notifications (not unread counts) until a time, or unmutes with null. */
+export async function setConversationMuted(userId: string, conversationId: string, until: Date | null) {
+  const { count } = await prisma.conversationParticipant.updateMany({
+    where: { conversationId, userId, removedAt: null },
+    data: { mutedUntil: until },
+  });
+  if (count === 0) return { error: "Forbidden" } as const;
+  const mutedUntil = until?.toISOString() ?? null;
+  emitRealtime(`user:${userId}`, "conversation:updated", { conversationId, mutedUntil });
+  return { ok: true, mutedUntil } as const;
+}
+
+/** Staff change a ticket; status changes leave a note in the thread and the customer's inbox updates. */
+export async function updateSupportTicket(actorId: string, ticketId: string, input: Parameters<typeof updateTicket>[2]) {
+  const user = await getChatUser(actorId);
+  if (!user) return { error: "Forbidden" } as const;
+  const result = await updateTicket(user, ticketId, input);
+  if ("error" in result) return result;
+  emitRealtime(rooms.staff, "ticket:updated", result.ticket);
+  emitRealtime(`user:${result.requesterId}`, "conversation:updated", { conversationId: result.conversationId, ticket: result.ticket });
+  if (result.note) {
+    const sent = await sendChatMessage({ conversationId: result.conversationId, senderId: actorId, content: result.note, type: "SYSTEM", clientMsgId: `sys-${crypto.randomUUID()}` });
+    if (!("error" in sent)) {
+      emitRealtime(`conversation:${result.conversationId}`, "message:new", sent.message);
+      const update = { conversationId: result.conversationId, lastSeq: sent.message.seq, lastMessageAt: sent.message.createdAt, preview: messagePreview(sent.message), senderId: actorId };
+      for (const { userId, unread } of sent.recipients) emitRealtime(`user:${userId}`, "conversation:updated", { ...update, unread });
+      emitRealtime(rooms.staff, "conversation:updated", update);
+    }
+  }
+  if (result.notification) await notify([result.assigned!], result.notification);
+  return { ok: true, ticket: result.ticket } as const;
+}
+
+export async function resolveMessageReport(actorId: string, reportId: string, action: "remove" | "dismiss") {
+  const user = await getChatUser(actorId);
+  if (!user) return { error: "Forbidden" } as const;
+  const result = await resolveReport(user, reportId, action);
+  if ("error" in result) return result;
+  if (result.removed) {
+    emitRealtime(`conversation:${result.removed.conversationId}`, "message:updated", result.removed);
+    await pushPreview(result.removed.conversationId);
+  }
+  revalidatePath("/admin/messages");
+  return { ok: true } as const;
+}
+
+/** Unread per conversation, which of them are muted, and the total (muted ones don't count). */
+export async function unreadSummary(userId: string) {
+  const rows = await prisma.conversationParticipant.findMany({
+    where: { userId, removedAt: null },
+    select: { conversationId: true, lastReadSeq: true, mutedUntil: true, conversation: { select: { lastSeq: true } } },
+  });
+  const now = Date.now();
+  const conversations: Record<string, number> = {};
+  const muted: string[] = [];
+  let total = 0;
+  for (const row of rows) {
+    const isMuted = !!row.mutedUntil && row.mutedUntil.getTime() > now;
+    if (isMuted) muted.push(row.conversationId);
+    const unread = Math.max(0, row.conversation.lastSeq - row.lastReadSeq);
+    if (unread === 0) continue;
+    conversations[row.conversationId] = unread;
+    if (!isMuted) total += unread;
+  }
+  return { total, conversations, muted };
+}
+
+export { blockStateBetween, canModerateChat };

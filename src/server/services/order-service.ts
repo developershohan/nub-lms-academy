@@ -8,6 +8,8 @@ import { logAudit } from "@/lib/audit";
 import { validateCoupon, calculateDiscount } from "@/server/services/coupon-service";
 import { getPlatformSettings } from "@/server/services/settings-service";
 import { notify, notifyAdmins } from "@/server/services/notification-service";
+import { realtimeBus } from "@/lib/realtime";
+import { syncCourseMembership } from "@/server/chat/membership";
 import type { OrderStatus } from "@/generated/prisma/client";
 
 function revalidateOrderPaths() {
@@ -134,6 +136,8 @@ async function markOrderPaid(orderId: string, event: { id?: string; paymentInten
   });
   if (!claimed) return;
 
+  // Course channels follow access: the buyer joins them now, not on their next inbox load.
+  await syncCourseMembership(realtimeBus, [order.userId]);
   await notifyPurchase(order.userId, order.items.map((item) => item.courseId), orderId);
   revalidateOrderPaths();
   revalidatePath("/student/my-courses");
@@ -246,6 +250,8 @@ async function applyRefund(orderId: string, { from, stripeEventId }: { from: Ord
   });
 
   if (applied) {
+    // Out of the course channels at once, live sockets included.
+    await syncCourseMembership(realtimeBus, [order.userId]);
     await notify([order.userId], {
       type: "refund",
       title: "Your refund was processed",
@@ -283,6 +289,7 @@ async function applyDisputeOpened(orderId: string, stripeEventId: string) {
   });
   if (!applied) return;
 
+  await syncCourseMembership(realtimeBus, [order.userId]);
   await notifyAdmins({
     type: "payment-dispute",
     title: "A payment was disputed",
@@ -312,6 +319,7 @@ async function applyDisputeWon(orderId: string, stripeEventId: string) {
     return true;
   });
   if (applied) {
+    await syncCourseMembership(realtimeBus, [order.userId]);
     revalidateOrderPaths();
     revalidatePath("/student/my-courses");
   }

@@ -7,6 +7,7 @@ import { parseJsonBody } from "@/lib/http/json";
 const sendSchema = z.object({
   content: z.string().trim().min(1).max(2000),
   clientMsgId: z.string().min(1).max(64).optional(),
+  replyToId: z.string().min(1).max(64).nullish(),
 });
 
 /** A seq from the query string, or undefined when absent or not a whole number. */
@@ -42,7 +43,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ con
   const parsed = await parseJsonBody(request, sendSchema);
   if ("response" in parsed) return parsed.response;
 
-  const result = await sendMessage(session.user.id, conversationId, parsed.data.content, parsed.data.clientMsgId);
-  if ("error" in result) return NextResponse.json({ error: result.error }, { status: 400 });
+  const result = await sendMessage(session.user.id, conversationId, parsed.data.content, parsed.data.clientMsgId, parsed.data.replyToId);
+  if ("error" in result) return NextResponse.json({ error: result.error }, { status: result.error === "Forbidden" ? 403 : 400 });
   return NextResponse.json(result);
 }
