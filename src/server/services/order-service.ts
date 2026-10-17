@@ -7,7 +7,7 @@ import { canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { validateCoupon, calculateDiscount } from "@/server/services/coupon-service";
 import { getPlatformSettings } from "@/server/services/settings-service";
-import { notifyAdmins } from "@/server/services/notification-service";
+import { notify, notifyAdmins } from "@/server/services/notification-service";
 import type { OrderStatus } from "@/generated/prisma/client";
 
 function revalidateOrderPaths() {
@@ -134,9 +134,36 @@ async function markOrderPaid(orderId: string, event: { id?: string; paymentInten
   });
   if (!claimed) return;
 
+  await notifyPurchase(order.userId, order.items.map((item) => item.courseId), orderId);
   revalidateOrderPaths();
   revalidatePath("/student/my-courses");
   revalidatePath("/student/dashboard");
+}
+
+/** The student's receipt (in the app, and by email unless they turned it off), and each teacher's
+ * "new students" note - collapsed per course so a busy launch day is one notification, not fifty. */
+async function notifyPurchase(userId: string, courseIds: string[], orderId: string) {
+  const courses = await prisma.course.findMany({ where: { id: { in: courseIds } }, select: { id: true, title: true, teacherId: true } });
+  const titles = courses.map((c) => c.title).join(", ");
+  await notify([userId], {
+    type: "payment",
+    title: "Payment received",
+    body: `You're enrolled in ${titles}.`,
+    link: "/student/my-courses",
+    entity: { type: "Order", id: orderId },
+    refreshPage: true,
+  });
+  for (const course of courses) {
+    await notify([course.teacherId], {
+      type: "new_student",
+      title: `New students in "${course.title}"`,
+      body: "Someone just enrolled.",
+      link: "/teacher/dashboard",
+      actorId: userId,
+      entity: { type: "Course", id: course.id },
+      groupKey: `new-students:${course.id}`,
+    });
+  }
 }
 
 async function recordCapturedPaymentIntent(orderId: string, paymentIntentId: string | null) {
@@ -219,6 +246,14 @@ async function applyRefund(orderId: string, { from, stripeEventId }: { from: Ord
   });
 
   if (applied) {
+    await notify([order.userId], {
+      type: "refund",
+      title: "Your refund was processed",
+      body: "The course access from this order has ended. Refunds usually reach your account within 5-10 business days.",
+      link: "/student/billing",
+      entity: { type: "Order", id: orderId },
+      refreshPage: true,
+    });
     revalidateOrderPaths();
     revalidatePath("/student/my-courses");
   }
@@ -253,6 +288,7 @@ async function applyDisputeOpened(orderId: string, stripeEventId: string) {
     title: "A payment was disputed",
     body: `Order ${orderId} has a chargeback; course access is suspended until it closes. Respond in the Stripe dashboard.`,
     link: "/admin/orders",
+    entity: { type: "Order", id: orderId },
   });
   revalidateOrderPaths();
   revalidatePath("/student/my-courses");

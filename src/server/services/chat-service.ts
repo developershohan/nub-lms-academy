@@ -2,7 +2,7 @@ import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { canAccessConversation, canAccessCourse, canManageCourse, canModerateChat } from "@/lib/permissions";
-import { createNotifications } from "@/server/services/notification-service";
+import { notify } from "@/server/services/notification-service";
 import { logAudit } from "@/lib/audit";
 import { emitRealtime } from "@/lib/realtime";
 import {
@@ -12,15 +12,10 @@ import {
   listMessagesAfter,
   markChatRead,
   messagePreview,
+  notifyAboutMessage,
   sendChatMessage,
 } from "@/server/chat/messages";
 import type { RoleName } from "@/generated/prisma/client";
-
-function messagesPathForRoles(roles: RoleName[]) {
-  if (roles.includes("ADMIN") || roles.includes("SUPER_ADMIN")) return "/admin/messages";
-  if (roles.includes("TEACHER")) return "/teacher/messages";
-  return "/student/messages";
-}
 
 function revalidateChatPaths() {
   revalidatePath("/student/messages");
@@ -290,21 +285,8 @@ export async function sendMessage(senderId: string, conversationId: string, cont
     emitRealtime(`user:${userId}`, "conversation:updated", { ...update, unread });
   }
 
-  if (result.recipients.length) {
-    const recipientRoles = await prisma.user.findMany({
-      where: { id: { in: result.recipients.map((r) => r.userId) } },
-      select: { id: true, roles: { select: { role: { select: { name: true } } } } },
-    });
-    await createNotifications(
-      recipientRoles.map((r) => ({
-        userId: r.id,
-        type: "message",
-        title: "New message",
-        body: message.content.slice(0, 140),
-        link: messagesPathForRoles(r.roles.map((x) => x.role.name)),
-      }))
-    );
-  }
+  // No presence here (that's the socket server's), so every other member is notified.
+  await notifyAboutMessage(notify, result);
 
   revalidateChatPaths();
   return { ok: true, message } as const;
@@ -321,6 +303,12 @@ export async function markConversationRead(userId: string, conversationId: strin
     userId,
     lastReadSeq: result.lastReadSeq,
   });
+  if (result.notifications.cleared > 0) {
+    emitRealtime(`user:${userId}`, "notification:read", {
+      groupKey: `conversation:${conversationId}`,
+      unreadCount: result.notifications.unreadCount,
+    });
+  }
   return result;
 }
 

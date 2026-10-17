@@ -28,6 +28,7 @@ import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "@/components/ui/s
 import { NotificationBell } from "@/components/notifications/notification-bell";
 import { UserMenu } from "@/components/layout/user-menu";
 import { isUnder } from "@/lib/role-home";
+import type { PushedNotification } from "@/server/notifications/notify";
 import { cn } from "@/lib/utils";
 
 // Layouts are server components, so they name an icon rather than pass the component itself.
@@ -56,14 +57,7 @@ export type DashboardNavItem = {
   activeFor?: string[];
 };
 
-type NotificationItem = {
-  id: string;
-  title: string;
-  body: string | null;
-  link: string | null;
-  status: "UNREAD" | "READ";
-  createdAt: string;
-};
+type NotificationItem = PushedNotification;
 
 type ShellUser = {
   name: string | null;

@@ -3,7 +3,7 @@ import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
-import { createNotifications } from "@/server/services/notification-service";
+import { notify } from "@/server/services/notification-service";
 
 async function getAdminUserIds() {
   const admins = await prisma.userRole.findMany({
@@ -25,15 +25,14 @@ export async function applyForTeacher(userId: string) {
 
   const adminIds = await getAdminUserIds();
   if (adminIds.length) {
-    await createNotifications(
-      adminIds.map((id) => ({
-        userId: id,
-        type: "teacher_application",
-        title: "New teacher application",
-        body: applicant?.name ?? applicant?.email ?? "A user applied to become a teacher",
-        link: "/admin/teachers",
-      }))
-    );
+    await notify(adminIds, {
+      type: "teacher_application_received",
+      title: "New teacher application",
+      body: applicant?.name ?? applicant?.email ?? "A user applied to become a teacher",
+      link: "/admin/teachers",
+      actorId: userId,
+      entity: { type: "TeacherProfile", id: profile.id },
+    });
   }
 
   revalidatePath("/teacher/apply");
@@ -66,15 +65,15 @@ export async function approveTeacherApplication(actorId: string, teacherId: stri
   });
 
   await logAudit(actorId, "teacher:approve", "TeacherProfile", teacherId);
-  await createNotifications([
-    {
-      userId: profile.userId,
-      type: "teacher_application",
-      title: "You're approved as a teacher",
-      body: "You can now create and publish courses.",
-      link: "/teacher/dashboard",
-    },
-  ]);
+  await notify([profile.userId], {
+    type: "teacher_application",
+    title: "You're approved as a teacher",
+    body: "You can now create and publish courses.",
+    link: "/teacher/dashboard",
+    actorId,
+    entity: { type: "TeacherProfile", id: teacherId },
+    refreshPage: true,
+  });
   revalidatePath("/admin/teachers");
   revalidatePath("/admin/dashboard");
   revalidatePath("/teacher/apply");
@@ -93,14 +92,14 @@ export async function rejectTeacherApplication(actorId: string, teacherId: strin
   });
 
   await logAudit(actorId, "teacher:reject", "TeacherProfile", teacherId);
-  await createNotifications([
-    {
-      userId: profile.userId,
-      type: "teacher_application",
-      title: "Your teacher application was rejected",
-      link: "/teacher/apply",
-    },
-  ]);
+  await notify([profile.userId], {
+    type: "teacher_application",
+    title: "Your teacher application was rejected",
+    link: "/teacher/apply",
+    actorId,
+    entity: { type: "TeacherProfile", id: teacherId },
+    refreshPage: true,
+  });
   revalidatePath("/admin/teachers");
   revalidatePath("/admin/dashboard");
   revalidatePath("/teacher/apply");

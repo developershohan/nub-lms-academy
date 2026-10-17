@@ -8,6 +8,12 @@ vi.mock("../chat-store", () => ({
   listMessagesAfter: vi.fn(),
 }));
 
+vi.mock("@/server/chat/messages", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/chat/messages")>()),
+  notifyAboutMessage: vi.fn(),
+}));
+
+import { notifyAboutMessage } from "@/server/chat/messages";
 import { canAccessConversation, listMessagesAfter, persistMessage } from "../chat-store";
 import { registerChatEvents } from "./chat.events";
 
@@ -120,6 +126,10 @@ describe("chat socket events", () => {
     expect(emitted).toContainEqual(
       expect.objectContaining({ target: "user:teacher-1", event: "conversation:updated", payload: expect.objectContaining({ unread: 3, lastSeq: 9 }) })
     );
+    // Notified, minus whoever already has the conversation open.
+    expect(notifyAboutMessage).toHaveBeenCalledWith(expect.any(Function), expect.objectContaining({ message: saved }), {
+      viewing: expect.any(Set),
+    });
   });
 
   it("acks a retried send with the original message without broadcasting it again", async () => {
@@ -132,6 +142,7 @@ describe("chat socket events", () => {
 
     expect(ack).toHaveBeenCalledWith({ message: saved });
     expect(emitted).toEqual([]);
+    expect(notifyAboutMessage).not.toHaveBeenCalled();
   });
 
   it("answers a reconnect sync with the gap, only for conversations the user can open", async () => {

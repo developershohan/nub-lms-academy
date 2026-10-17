@@ -72,6 +72,7 @@ model User {
   conversationParticipants ConversationParticipant[]
   messages                 Message[]
   notifications            Notification[]
+  notificationPreferences  NotificationPreference[]
   subInstructorOf          CourseInstructor[] @relation("SubInstructorUser")
   addedSubInstructors      CourseInstructor[] @relation("SubInstructorAddedBy")
 
@@ -829,19 +830,45 @@ enum NotificationStatus {
   READ
 }
 
+/// Written only through notify() (src/server/notifications/notify.ts), which also pushes it live.
 model Notification {
-  id        String             @id @default(cuid())
-  userId    String
-  type      String
-  title     String
-  body      String?
-  link      String?
-  status    NotificationStatus @default(UNREAD)
-  createdAt DateTime           @default(now())
+  id         String             @id @default(cuid())
+  userId     String
+  type       String
+  title      String
+  body       String?
+  link       String?
+  status     NotificationStatus @default(UNREAD)
+  /// Who caused it, when someone did (the sender of a message, the admin who approved a course).
+  actorId    String?
+  /// What it is about, e.g. "Course" + id - lets the UI and later jobs find related notifications.
+  entityType String?
+  entityId   String?
+  /// Extra detail for the UI, e.g. { count: 3 } for collapsed messages.
+  data       Json?
+  /// Unread notifications with the same key collapse into one ("3 new messages from Naima"),
+  /// e.g. "conversation:<id>". Reading the conversation clears them.
+  groupKey   String?
+  readAt     DateTime?
+  createdAt  DateTime           @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, status])
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([userId, groupKey])
+}
+
+/// A user's choice per notification category (see NOTIFICATION_CATEGORIES); no row = the defaults.
+model NotificationPreference {
+  userId   String
+  category String
+  inApp    Boolean
+  email    Boolean
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([userId, category])
 }
 
 /** Single-row table (id is always "singleton") for platform-wide toggles admins control at runtime. */

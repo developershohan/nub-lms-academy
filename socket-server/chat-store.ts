@@ -55,23 +55,10 @@ export async function canAccessConversation(roleNames: RoleName[], userId: strin
   return !!participant;
 }
 
-/** Sends through the shared chat module (seq, idempotent clientMsgId), then leaves one "new
- * message" notification per recipient. */
-export async function persistMessage(conversationId: string, senderId: string, content: string, clientMsgId?: string) {
-  const result = await sendChatMessage({ conversationId, senderId, content, clientMsgId });
-  if ("error" in result) return result;
-
-  if (!result.duplicate && result.recipients.length) {
-    await prisma.notification.createMany({
-      data: result.recipients.map((r) => ({
-        userId: r.userId,
-        type: "message",
-        title: "New message",
-        body: content.slice(0, 140),
-      })),
-    });
-  }
-  return result;
+/** Sends through the shared chat module (seq, idempotent clientMsgId). Notifications are the
+ * caller's job (events/chat.events.ts), since it knows who is looking at the conversation. */
+export function persistMessage(conversationId: string, senderId: string, content: string, clientMsgId?: string) {
+  return sendChatMessage({ conversationId, senderId, content, clientMsgId });
 }
 
 export { markChatRead, listMessagesAfter } from "@/server/chat/messages";

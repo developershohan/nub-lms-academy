@@ -9,7 +9,7 @@ vi.mock("@/lib/permissions", () => ({
   canManageCourse: vi.fn(),
   canModerateChat: vi.fn(),
 }));
-vi.mock("@/server/services/notification-service", () => ({ createNotifications: vi.fn() }));
+vi.mock("@/server/services/notification-service", () => ({ notify: vi.fn() }));
 vi.mock("@/lib/audit", () => ({ logAudit: vi.fn() }));
 
 import { prisma as prismaClient } from "@/lib/prisma";

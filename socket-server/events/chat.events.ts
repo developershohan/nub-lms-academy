@@ -1,6 +1,7 @@
 import type { Server, Socket } from "socket.io";
 import { readMessagesSchema, sendMessageSchema, syncMessagesSchema } from "@/lib/validations/chat";
-import { messagePreview } from "@/server/chat/messages";
+import { messagePreview, notifyAboutMessage } from "@/server/chat/messages";
+import { createNotifier } from "@/server/notifications/notify";
 import { canAccessConversation, listMessagesAfter, markChatRead, persistMessage } from "../chat-store";
 
 const conversationRoom = (conversationId: string) => `conversation:${conversationId}`;
@@ -59,6 +60,17 @@ async function userIdsInRoom(io: Server, room: string, excludeSocketId?: string)
 async function announceOfflineIfGone(io: Server, room: string, userId: string, leavingSocketId: string) {
   const stillThere = await userIdsInRoom(io, room, leavingSocketId);
   if (!stillThere.has(userId)) io.to(room).emit("user:offline", { userId });
+}
+
+/** notify() for the socket server: rows plus a direct emit to the user's room (any node, via the adapter). */
+const notifiers = new WeakMap<Server, ReturnType<typeof createNotifier>>();
+function notifierFor(io: Server) {
+  let notify = notifiers.get(io);
+  if (!notify) {
+    notify = createNotifier({ push: (userId, event, payload) => io.to(`user:${userId}`).emit(event, payload) });
+    notifiers.set(io, notify);
+  }
+  return notify;
 }
 
 export function registerChatEvents(io: Server, socket: Socket) {
@@ -133,11 +145,16 @@ export function registerChatEvents(io: Server, socket: Socket) {
         // Every member's inbox (all their tabs) moves this conversation up, with their unread count.
         for (const { userId: recipientId, unread } of result.recipients) {
           io.to(`user:${recipientId}`).emit("conversation:updated", { ...update, unread });
-          io.to(`user:${recipientId}`).emit("notification:new");
         }
         io.to(`user:${userId}`).emit("conversation:updated", { ...update, unread: 0 });
       }
       ack?.({ message });
+
+      if (!result.duplicate) {
+        // Whoever has this conversation open already sees the message - no notification for them.
+        const viewing = await userIdsInRoom(io, conversationRoom(conversationId));
+        await notifyAboutMessage(notifierFor(io), result, { viewing });
+      }
     })
   );
 
@@ -154,6 +171,12 @@ export function registerChatEvents(io: Server, socket: Socket) {
       const result = await markChatRead(conversationId, userId, seq);
       if ("error" in result) return;
       io.to(`user:${userId}`).emit("conversation:updated", { conversationId, unread: result.unread });
+      if (result.notifications.cleared > 0) {
+        io.to(`user:${userId}`).emit("notification:read", {
+          groupKey: `conversation:${conversationId}`,
+          unreadCount: result.notifications.unreadCount,
+        });
+      }
       socket
         .to(conversationRoom(conversationId))
         .emit("conversation:read", { conversationId, userId, lastReadSeq: result.lastReadSeq });

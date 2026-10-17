@@ -5,7 +5,7 @@ import { canManageCourse, canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { slugify } from "@/lib/slug";
 import { recomputeCourseCompletion } from "@/server/services/progress-service";
-import { notifyAdmins } from "@/server/services/notification-service";
+import { notify, notifyAdmins } from "@/server/services/notification-service";
 import { refreshCourseStats } from "@/server/services/course-stats-service";
 import { getCourseChecklist, moveInList, studioHref } from "@/lib/studio";
 import type { Prisma } from "@/generated/prisma/client";
@@ -75,6 +75,8 @@ async function flagChangedSinceReview(
     title: `"${course.title}" changed after review`,
     body: `The teacher changed: ${change}`,
     link: "/admin/courses",
+    actorId,
+    entity: { type: "Course", id: courseId },
   });
 }
 
@@ -371,6 +373,22 @@ export async function submitCourseForReview(courseId: string, userId: string) {
   return { ok: true } as const;
 }
 
+/** Tells the owning teacher what an admin decided about their course. */
+function notifyTeacherOfDecision(
+  course: { id: string; teacherId: string },
+  actorId: string,
+  message: { title: string; body: string }
+) {
+  return notify([course.teacherId], {
+    type: "course_decision",
+    ...message,
+    link: studioHref(course.id),
+    actorId,
+    entity: { type: "Course", id: course.id },
+    refreshPage: true,
+  });
+}
+
 export async function approveCourse(actorId: string, courseId: string) {
   if (!(await canAdminAccess(actorId))) return { error: "Forbidden" } as const;
 
@@ -380,6 +398,10 @@ export async function approveCourse(actorId: string, courseId: string) {
 
   await prisma.course.update({ where: { id: courseId }, data: { status: "APPROVED", changedSinceReviewAt: null } });
   await logAudit(actorId, "course:approve", "Course", courseId);
+  await notifyTeacherOfDecision(course, actorId, {
+    title: `"${course.title}" was approved`,
+    body: "It will be published to the catalogue shortly.",
+  });
   revalidateCoursePaths(courseId);
   return { ok: true } as const;
 }
@@ -393,6 +415,7 @@ export async function rejectCourse(actorId: string, courseId: string, reason: st
 
   await prisma.course.update({ where: { id: courseId }, data: { status: "REJECTED", rejectionReason: reason } });
   await logAudit(actorId, "course:reject", "Course", courseId, { reason });
+  await notifyTeacherOfDecision(course, actorId, { title: `Changes requested on "${course.title}"`, body: reason });
   revalidateCoursePaths(courseId);
   return { ok: true } as const;
 }
@@ -406,6 +429,10 @@ export async function publishCourse(actorId: string, courseId: string) {
 
   await prisma.course.update({ where: { id: courseId }, data: { status: "PUBLISHED", publishedAt: new Date() } });
   await logAudit(actorId, "course:publish", "Course", courseId);
+  await notifyTeacherOfDecision(course, actorId, {
+    title: `"${course.title}" is live`,
+    body: "Students can now find and enroll in it.",
+  });
   revalidateCoursePaths(courseId, course.slug);
   return { ok: true } as const;
 }

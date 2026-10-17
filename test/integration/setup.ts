@@ -16,5 +16,6 @@ vi.mock("@/lib/auth", () => ({ auth: vi.fn(), signIn: vi.fn(), signOut: vi.fn() 
 vi.mock("@/lib/email", () => ({
   sendVerificationEmail: vi.fn().mockResolvedValue({ ok: true }),
   sendPasswordResetEmail: vi.fn().mockResolvedValue({ ok: true }),
+  sendNotificationEmail: vi.fn().mockResolvedValue({ ok: true }),
 }));
 vi.mock("@/lib/realtime", () => ({ emitRealtime: vi.fn(), disconnectUserSockets: vi.fn() }));

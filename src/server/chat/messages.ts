@@ -9,6 +9,7 @@
  */
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
+import { markGroupRead, type NotifyInput } from "@/server/notifications/notify";
 
 export const MESSAGE_MAX_LENGTH = 2000;
 /** Most messages one catch-up returns; past that the client reloads the newest page instead. */
@@ -67,13 +68,15 @@ export async function sendChatMessage({
 
   const now = new Date();
   let message: ChatMessageRow;
+  let conversation: ConversationInfo;
   try {
     message = await prisma.$transaction(async (tx) => {
-      const { lastSeq: seq } = await tx.conversation.update({
+      const { lastSeq: seq, ...info } = await tx.conversation.update({
         where: { id: conversationId },
         data: { lastSeq: { increment: 1 }, lastMessageAt: now },
-        select: { lastSeq: true },
+        select: { lastSeq: true, type: true, uniqueKey: true, course: { select: { title: true } } },
       });
+      conversation = { type: info.type, uniqueKey: info.uniqueKey, courseTitle: info.course?.title ?? null };
       const created = await tx.message.create({
         data: { conversationId, senderId, content: text, seq, clientMsgId: clientMsgId || null, createdAt: now },
         include: SENDER,
@@ -100,7 +103,82 @@ export async function sendChatMessage({
     select: { userId: true, lastReadSeq: true },
   });
   const recipients = members.map((m) => ({ userId: m.userId, unread: Math.max(0, message.seq - m.lastReadSeq) }));
-  return { ok: true, message, duplicate: false, recipients } as const;
+  return { ok: true, message, duplicate: false, recipients, conversation: conversation! } as const;
+}
+
+type ConversationInfo = {
+  type: "DIRECT" | "COURSE_GROUP" | "SUPPORT";
+  uniqueKey: string | null;
+  courseTitle: string | null;
+};
+
+/** One collapsing notification per conversation: "Naima sent you a message", then a count. */
+export function messageNotification(
+  conversationId: string,
+  conversation: ConversationInfo,
+  message: ChatMessageRow
+): NotifyInput {
+  const sender = message.sender.name ?? "Someone";
+  return {
+    type: "message",
+    title:
+      conversation.type === "COURSE_GROUP"
+        ? `New messages in ${conversation.courseTitle ?? "your course group"}`
+        : conversation.type === "SUPPORT"
+          ? "New message about your support request"
+          : `${sender} sent you a message`,
+    body: `${sender}: ${messagePreview(message)}`,
+    link: `/messages?c=${conversationId}`,
+    actorId: message.senderId,
+    entity: { type: "Conversation", id: conversationId },
+    groupKey: `conversation:${conversationId}`,
+  };
+}
+
+/** The person who opened a support thread ("support:<userId>"), or null for other conversations. */
+export function supportRequester(conversation: ConversationInfo) {
+  return conversation.type === "SUPPORT" && conversation.uniqueKey?.startsWith("support:")
+    ? conversation.uniqueKey.slice("support:".length)
+    : null;
+}
+
+/** Active admins and support agents - who answers support requests. */
+export async function staffUserIds() {
+  const staff = await prisma.user.findMany({
+    where: { status: "ACTIVE", roles: { some: { role: { name: { in: ["ADMIN", "SUPER_ADMIN", "SUPPORT"] } } } } },
+    select: { id: true },
+  });
+  return staff.map((u) => u.id);
+}
+
+/**
+ * After a message is saved: tells the other members (minus anyone already looking at the
+ * conversation), and when a student writes to support, every staff member who isn't in the thread
+ * yet. `notify` is the calling process's notifier (see createNotifier).
+ */
+export async function notifyAboutMessage(
+  notify: (userIds: string[], input: NotifyInput) => Promise<unknown>,
+  sent: { message: ChatMessageRow; recipients: { userId: string }[]; conversation: ConversationInfo },
+  { viewing = new Set<string>() }: { viewing?: Set<string> } = {}
+) {
+  const { message, conversation } = sent;
+  const conversationId = message.conversationId;
+  const members = sent.recipients.map((r) => r.userId);
+  await notify(members.filter((id) => !viewing.has(id)), messageNotification(conversationId, conversation, message));
+
+  if (supportRequester(conversation) === message.senderId) {
+    const inThread = new Set(members);
+    const staff = (await staffUserIds()).filter((id) => !inThread.has(id) && !viewing.has(id));
+    await notify(staff, {
+      type: "support_request",
+      title: `Support request from ${message.sender.name ?? "a student"}`,
+      body: messagePreview(message),
+      link: `/messages?c=${conversationId}`,
+      actorId: message.senderId,
+      entity: { type: "Conversation", id: conversationId },
+      groupKey: `support:${conversationId}`,
+    });
+  }
 }
 
 /**
@@ -130,7 +208,17 @@ export async function markChatRead(conversationId: string, userId: string, seq?:
     where: { conversationId_userId: { conversationId, userId } },
     select: { lastReadSeq: true },
   });
-  return { ok: true, lastReadSeq: member.lastReadSeq, unread: conversation.lastSeq - member.lastReadSeq } as const;
+  // Caught up: the conversation's "new message" notification has done its job.
+  const notifications =
+    member.lastReadSeq >= conversation.lastSeq
+      ? await markGroupRead(userId, `conversation:${conversationId}`)
+      : { cleared: 0, unreadCount: null };
+  return {
+    ok: true,
+    lastReadSeq: member.lastReadSeq,
+    unread: conversation.lastSeq - member.lastReadSeq,
+    notifications,
+  } as const;
 }
 
 /**
