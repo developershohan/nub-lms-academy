@@ -12,6 +12,8 @@ import {
 } from "./certificate-pdf";
 
 const charWidth = (text: string) => [...text].length;
+// fontkit glyphs carry their PostScript name at runtime; the bundled typings just don't declare it.
+const glyphNames = (glyphs: unknown[]) => glyphs.map((glyph) => (glyph as { name: string }).name);
 
 describe("renderCertificatePdf", () => {
   it("renders Bengali names and titles instead of throwing on WinAnsi encoding", async () => {
@@ -45,14 +47,14 @@ describe("createBengaliFont", () => {
     for (const word of ["মোঃ রহিম উদ্দিন", "ওয়েব ডেভেলপমেন্ট বুটক্যাম্প", "একদম শুরু থেকে শিক্ষা"]) {
       const { glyphs } = font.layout(word);
       glyphs.forEach((glyph) => font.outlineSvg(glyph.id));
-      expect(glyphs.map((glyph) => glyph.name)).not.toContain("dottedCircle");
+      expect(glyphNames(glyphs)).not.toContain("dottedCircle");
     }
   });
 
   it("forms conjuncts through the font's GSUB rules", () => {
     const font = createBengaliFont(readFileSync(path.join(process.cwd(), "src/assets/fonts/NotoSansBengali-Regular.ttf")));
     // ক্ষ is a single conjunct glyph and the i-matra in শি is reordered before its consonant.
-    expect(font.layout("শিক্ষা").glyphs.map((glyph) => glyph.name)).toEqual([
+    expect(glyphNames(font.layout("শিক্ষা").glyphs)).toEqual([
       expect.stringMatching(/^iMatra-beng/),
       "sha-beng",
       "k_ssa-beng",
