@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { BookPlus } from "lucide-react";
 import { getCurrentUser } from "@/lib/permissions";
 import { listTeacherCourses } from "@/server/services/course-service";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { EmptyState } from "@/components/ui/empty-state";
 
 export default async function TeacherCoursesPage() {
   const user = await getCurrentUser();
@@ -19,7 +21,17 @@ export default async function TeacherCoursesPage() {
         <Button render={<Link href="/teacher/courses/create" />}>Create course</Button>
       </div>
 
-      {courses.length === 0 && <p className="text-muted-foreground">You haven&apos;t created any courses yet.</p>}
+      {courses.length === 0 && (
+        <EmptyState
+          icon={BookPlus}
+          title="Create your first course"
+          description="Start with a draft, add sections and lessons, then submit it for review. Students see it once an admin approves it."
+        >
+          <Button size="lg" render={<Link href="/teacher/courses/create" />}>
+            Create course
+          </Button>
+        </EmptyState>
+      )}
 
       <div className="space-y-3">
         {courses.map((course) => (
