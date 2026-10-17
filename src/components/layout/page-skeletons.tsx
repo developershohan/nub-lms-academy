@@ -104,9 +104,9 @@ export function CourseCardSkeleton({ index = 0 }: { index?: number }) {
   );
 }
 
-export function CourseGridSkeleton({ count = 6 }: { count?: number }) {
+export function CourseGridSkeleton({ count = 6, className }: { count?: number; className?: string }) {
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div className={cn("grid gap-4 sm:grid-cols-2 lg:grid-cols-3", className)}>
       {Array.from({ length: count }, (_, i) => (
         <CourseCardSkeleton key={i} index={i} />
       ))}

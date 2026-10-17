@@ -7,6 +7,7 @@ import { CatalogFilters } from "@/components/course/catalog-filters";
 import { CatalogFilterDrawer, CatalogSort } from "@/components/course/catalog-toolbar";
 import { SearchInput } from "@/components/ui/search-input";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { CATALOG_PAGE_SIZE, DURATIONS, catalogHref, pageWindow, parseCatalogParams } from "@/lib/catalog";
 import { cn } from "@/lib/utils";
 
@@ -111,16 +112,15 @@ export default async function CoursesPage({ searchParams }: { searchParams: Prom
           </div>
 
           {courses.length === 0 ? (
-            <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed px-6 py-16 text-center">
-              <SearchX className="size-10 text-muted-foreground" aria-hidden />
-              <p className="font-heading text-lg font-semibold">No courses match</p>
-              <p className="max-w-sm text-sm text-muted-foreground">
-                Try fewer filters, a broader search term, or browse every course.
-              </p>
+            <EmptyState
+              icon={SearchX}
+              title="No courses match"
+              description="Try fewer filters, a broader search term, or browse every course."
+            >
               <Button variant="outline" render={<Link href="/courses" />}>
                 Browse all courses
               </Button>
-            </div>
+            </EmptyState>
           ) : (
             <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
               {courses.map((course) => (

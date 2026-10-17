@@ -156,9 +156,8 @@ export function listCoursesForAdmin() {
   });
 }
 
-/** Full lesson content for the learning page - caller must check canAccessCourse first. */
-/** The learning player's view of a course. createdAt breaks sortOrder ties, so the lesson order
- * (and with it previous/next) is the same on every request. */
+/** Full lesson content for the learning player - caller must check canAccessCourse first.
+ * createdAt breaks sortOrder ties, so the lesson order (and with it previous/next) is the same on every request. */
 export function getCourseForLearning(courseId: string) {
   return prisma.course.findUnique({
     where: { id: courseId },
