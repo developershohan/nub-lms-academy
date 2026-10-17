@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { updateCourseLandingAction, type ActionState } from "@/app/teacher/(dashboard)/courses/[courseId]/actions";
 import { useActionSuccess } from "@/hooks/use-action-success";
 import { PUBLISH_RULES } from "@/lib/studio";
-import { courseLevels } from "@/lib/validations/course";
+import { courseLevels, isSitePath } from "@/lib/validations/course";
 import { CourseCard } from "@/components/course/course-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -190,7 +190,7 @@ export function LandingForm({
           <Input
             id="thumbnailUrl"
             name="thumbnailUrl"
-            type="url"
+            // Not type="url": the browser would refuse this site's own "/covers/..." images.
             inputMode="url"
             value={fields.thumbnailUrl}
             onChange={(e) => set("thumbnailUrl")(e.target.value)}
@@ -223,7 +223,8 @@ export function LandingForm({
               slug: "",
               title: fields.title || "Untitled course",
               subtitle: fields.subtitle || null,
-              thumbnailUrl: /^https?:\/\//i.test(fields.thumbnailUrl) ? fields.thumbnailUrl : null,
+              thumbnailUrl:
+                /^https?:\/\//i.test(fields.thumbnailUrl) || isSitePath(fields.thumbnailUrl) ? fields.thumbnailUrl : null,
               price: pricing.price,
               salePrice: pricing.salePrice,
               level: fields.level,

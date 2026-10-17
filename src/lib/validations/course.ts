@@ -31,6 +31,10 @@ export const courseDetailsSchema = z
   })
   .refine(saleBelowPrice, saleBelowPriceError);
 
+/** "/covers/x.svg" - an image served by this site (the seeded demo courses use these). Never
+ * "//host/..." , which would quietly point at another site. */
+export const isSitePath = (url: string) => /^\/(?!\/)\S*$/.test(url);
+
 /** Studio > Landing page: what the catalogue card and the public course page show. */
 export const courseLandingSchema = z.object({
   title: z.string().trim().min(3, "Title must be at least 3 characters").max(120, "Keep the title under 120 characters"),
@@ -42,7 +46,10 @@ export const courseLandingSchema = z.object({
   thumbnailUrl: z
     .string()
     .trim()
-    .refine((url) => url === "" || (/^https?:\/\//i.test(url) && URL.canParse(url)), "Enter an image link starting with https://")
+    .refine(
+      (url) => url === "" || isSitePath(url) || (/^https?:\/\//i.test(url) && URL.canParse(url)),
+      "Enter an image link starting with https://"
+    )
     .optional(),
   /** "Preview this course" on the landing page - YouTube only for now. */
   promoVideoUrl: z

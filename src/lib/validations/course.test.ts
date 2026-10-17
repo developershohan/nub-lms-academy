@@ -46,6 +46,11 @@ describe("courseLandingSchema thumbnailUrl", () => {
     expect(courseLandingSchema.parse({ ...landing, thumbnailUrl: "" }).thumbnailUrl).toBe("");
   });
 
+  it("accepts this site's own images by path, but not a protocol-relative link to another site", () => {
+    expect(courseLandingSchema.safeParse({ ...landing, thumbnailUrl: "/covers/modern-react.svg" }).success).toBe(true);
+    expect(courseLandingSchema.safeParse({ ...landing, thumbnailUrl: "//evil.example/a.png" }).success).toBe(false);
+  });
+
   it("rejects other schemes, which would end up in an img src", () => {
     for (const thumbnailUrl of ["javascript:alert(1)", "data:image/png;base64,AAAA", "ftp://x.com/a.png", "not a url"]) {
       expect(courseLandingSchema.safeParse({ ...landing, thumbnailUrl }).success).toBe(false);
