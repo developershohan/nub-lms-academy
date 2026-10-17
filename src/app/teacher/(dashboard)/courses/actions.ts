@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import { getCurrentUser, hasRole } from "@/lib/permissions";
 import { createCourse } from "@/server/services/course-service";
+import { studioHref } from "@/lib/studio";
 
 export type CreateCourseState = { error?: string };
 
@@ -22,5 +23,5 @@ export async function createCourseAction(
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
   const course = await createCourse(user.id, parsed.data.title);
-  redirect(`/teacher/courses/${course.id}/edit`);
+  redirect(studioHref(course.id));
 }

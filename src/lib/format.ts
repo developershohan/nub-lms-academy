@@ -17,6 +17,20 @@ export function formatLessonDuration(sec: number) {
   return hours > 0 ? `${hours}:${String(minutes).padStart(2, "0")}:${seconds}` : `${minutes}:${seconds}`;
 }
 
+/**
+ * Reads a lesson length as a teacher types it - "12:30", "1:02:05", or whole minutes ("12") -
+ * into seconds. Null when it isn't a length (seconds or minutes past 59 after a colon, junk text).
+ */
+export function parseLessonDuration(text: string): number | null {
+  const value = text.trim();
+  if (/^\d+$/.test(value)) return Number(value) * 60;
+  const match = /^(?:(\d+):)?(\d{1,2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const [, hours, minutes, seconds] = match;
+  if (Number(seconds) > 59 || (hours !== undefined && Number(minutes) > 59)) return null;
+  return Number(hours ?? 0) * 3600 + Number(minutes) * 60 + Number(seconds);
+}
+
 /** Whole hours of content for "12 hours on-demand", rounded to the nearest half hour above 1h. */
 export function formatHoursOfContent(totalSec: number) {
   const hours = totalSec / 3600;
@@ -35,6 +49,13 @@ export function formatCount(value: number) {
 
 export function formatPrice(value: number) {
   return value === 0 ? "Free" : `$${value.toFixed(2)}`;
+}
+
+const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+
+/** An amount of money, never "Free" - sales totals and the like: "$1,234.50", "$0.00". */
+export function formatMoney(value: number) {
+  return usd.format(value);
 }
 
 /** "3 days ago", "2 months ago" - for review dates, where the exact day doesn't matter. */

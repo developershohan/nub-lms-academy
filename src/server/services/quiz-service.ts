@@ -1,11 +1,12 @@
 import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { studioHref } from "@/lib/studio";
 import { canManageCourse } from "@/lib/permissions";
 import type { QuestionInput, QuizSettingsInput } from "@/lib/validations/quiz";
 
 function revalidateQuizPaths(courseId: string) {
-  revalidatePath(`/teacher/courses/${courseId}/edit`);
+  revalidatePath(studioHref(courseId), "layout");
 }
 
 async function getCourseIdForQuiz(quizId: string) {

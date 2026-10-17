@@ -40,6 +40,12 @@ const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/v1/certificates/*/download": ["./src/assets/fonts/*.ttf"],
   },
+  async redirects() {
+    return [
+      // The one-page course editor became the instructor studio; old links and bookmarks land on its overview.
+      { source: "/teacher/courses/:courseId/edit", destination: "/teacher/courses/:courseId", permanent: false },
+    ];
+  },
   async headers() {
     return [
       {

@@ -1,12 +1,13 @@
 import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
+import { studioHref } from "@/lib/studio";
 import { canManageCourse } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { createNotifications } from "@/server/services/notification-service";
 
 function revalidateCoursePaths(courseId: string) {
-  revalidatePath(`/teacher/courses/${courseId}/edit`);
+  revalidatePath(studioHref(courseId), "layout");
 }
 
 export function listSubInstructors(courseId: string) {

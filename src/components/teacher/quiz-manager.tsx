@@ -20,7 +20,7 @@ import {
   updateQuestionAction,
   deleteQuestionAction,
   type ActionState,
-} from "@/app/teacher/(dashboard)/courses/[courseId]/edit/quiz-actions";
+} from "@/app/teacher/(dashboard)/courses/[courseId]/quiz-actions";
 
 type Option = { id: string; content: string; isCorrect: boolean };
 type QuestionType = (typeof questionTypes)[number];
