@@ -214,6 +214,8 @@ model Course {
   subtitle               String?
   description            String?      @db.Text
   thumbnailUrl           String?
+  /// A YouTube link shown as "Preview this course" on the landing page.
+  promoVideoUrl          String?
   targetAudience         String?      @db.Text
   level                  CourseLevel  @default(ALL_LEVELS)
   language               String       @default("English")
@@ -395,6 +397,11 @@ model LessonProgress {
   completedAt    DateTime?
   /// When the student last opened this lesson in the player - the learn page resumes there.
   lastViewedAt   DateTime?
+  /// Where playback was at the last report - the video resumes here.
+  positionSec    Int       @default(0)
+  /// When the player last reported. Watch time credited per report is capped by the real time
+  /// since then (see lib/watch-progress.ts), so progress can't be faked by sending big numbers.
+  lastReportAt   DateTime?
   updatedAt      DateTime  @updatedAt
 
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)

@@ -24,7 +24,7 @@ export async function markLessonCompleteAction(
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
   const lessonId = formData.get("lessonId") as string;
-  const result = await recordLessonProgress(session.user.id, lessonId, parsed.data.watchedSeconds, true);
+  const result = await recordLessonProgress(session.user.id, lessonId, true);
   if ("error" in result) return { error: result.error };
 
   const [course, progress] = await Promise.all([

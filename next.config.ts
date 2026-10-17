@@ -18,14 +18,15 @@ const socketWsOrigin = socketOrigin.replace(/^http/, "ws");
 // is a real, acknowledged tradeoff of that choice, not an oversight. See docs/security/platform-security.md.
 const cspDirectives = [
   "default-src 'self'",
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  // youtube.com: the IFrame Player API script (src/components/video/youtube-player.tsx).
+  `script-src 'self' 'unsafe-inline' https://www.youtube.com${isDev ? " 'unsafe-eval'" : ""}`,
   "style-src 'self' 'unsafe-inline'",
-  // https: covers OAuth provider avatar images (Google/GitHub, no fixed domain list) - no
-  // next/image usage in this codebase today, so no images.remotePatterns config is needed.
+  // https: covers OAuth provider avatar images (Google/GitHub, no fixed domain list) and YouTube
+  // thumbnails (img.youtube.com) - no next/image usage today, so no images.remotePatterns needed.
   "img-src 'self' https: data: blob:",
   "font-src 'self' data:",
-  // Course video embeds (src/lib/video-embed.ts) render as iframes from these two hosts only.
-  "frame-src 'self' https://www.youtube.com https://player.vimeo.com",
+  // Course video embeds (src/lib/video-embed.ts): YouTube's privacy-enhanced host and Vimeo.
+  "frame-src 'self' https://www.youtube-nocookie.com https://www.youtube.com https://player.vimeo.com",
   `connect-src 'self' ${socketOrigin} ${socketWsOrigin}`,
   "object-src 'none'",
   "base-uri 'self'",

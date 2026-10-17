@@ -2,17 +2,20 @@ import { describe, expect, it } from "vitest";
 import { getVideoEmbed } from "./video-embed";
 
 describe("getVideoEmbed", () => {
-  it("converts youtube.com/watch links", () => {
-    expect(getVideoEmbed("https://www.youtube.com/watch?v=abc123")).toEqual({
+  it("converts youtube.com/watch links to the privacy-enhanced embed", () => {
+    expect(getVideoEmbed("https://www.youtube.com/watch?v=dQw4w9WgXcQ")).toEqual({
       kind: "youtube",
-      embedUrl: "https://www.youtube.com/embed/abc123",
+      videoId: "dQw4w9WgXcQ",
+      startSec: null,
+      embedUrl: "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=0&modestbranding=1&playsinline=1",
     });
   });
 
-  it("converts youtu.be short links", () => {
-    expect(getVideoEmbed("https://youtu.be/abc123")).toEqual({
+  it("converts youtu.be short links, keeping the start time", () => {
+    expect(getVideoEmbed("https://youtu.be/dQw4w9WgXcQ?t=42")).toMatchObject({
       kind: "youtube",
-      embedUrl: "https://www.youtube.com/embed/abc123",
+      videoId: "dQw4w9WgXcQ",
+      startSec: 42,
     });
   });
 

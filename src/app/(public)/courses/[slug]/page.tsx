@@ -182,6 +182,7 @@ export default async function CourseDetailPage({ params }: Props) {
             <CourseBuyBox
               title={course.title}
               thumbnailUrl={course.thumbnailUrl}
+              promoVideoUrl={course.promoVideoUrl}
               category={course.category}
               pricing={pricing}
               stats={stats}

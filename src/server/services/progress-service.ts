@@ -2,6 +2,7 @@ import "server-only";
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { canAccessLesson } from "@/lib/permissions";
+import { creditWatchTime, isWatchedEnough } from "@/lib/watch-progress";
 
 /**
  * Brings Enrollment.completedAt in line with the course's CURRENT lessons - for one student after
@@ -56,12 +57,18 @@ export async function recomputeCourseCompletion(courseId: string, userId?: strin
   }
 }
 
-export async function recordLessonProgress(
-  userId: string,
-  lessonId: string,
-  watchedSeconds: number,
-  completed: boolean
-) {
+function revalidateProgressPaths(courseId: string) {
+  revalidatePath(`/student/course/${courseId}/learn`);
+  revalidatePath("/student/dashboard");
+  revalidatePath("/student/my-courses");
+}
+
+/**
+ * The student's "Mark as complete". A completed=false call (old API clients) changes nothing - it
+ * must never un-complete a lesson. Watch time is never taken from the client: only
+ * recordVideoProgress credits it, capped by real elapsed time.
+ */
+export async function recordLessonProgress(userId: string, lessonId: string, completed: boolean) {
   if (!(await canAccessLesson(userId, lessonId))) return { error: "Forbidden" } as const;
 
   const lesson = await prisma.lesson.findUnique({
@@ -70,20 +77,77 @@ export async function recordLessonProgress(
   });
   if (!lesson) return { error: "Not found" } as const;
   const courseId = lesson.section.courseId;
+  if (!completed) return { ok: true, courseId } as const;
 
   await prisma.lessonProgress.upsert({
     where: { userId_lessonId: { userId, lessonId } },
-    create: { userId, lessonId, watchedSeconds, completed, completedAt: completed ? new Date() : null },
-    update: { watchedSeconds, completed, completedAt: completed ? new Date() : null },
+    create: { userId, lessonId, completed: true, completedAt: new Date() },
+    update: { completed: true, completedAt: new Date() },
+  });
+  await recomputeCourseCompletion(courseId, userId);
+  revalidateProgressPaths(courseId);
+  return { ok: true, courseId } as const;
+}
+
+/**
+ * A playback report from the video player: where it is now (and whether it reached the end).
+ * Credits only forward progress, capped by the real time since the last report or since the
+ * lesson was opened (see creditWatchTime), and completes the lesson once 90% of its known length
+ * has been watched. Returns `justCompleted` so the player can tell the student.
+ */
+export async function recordVideoProgress(
+  userId: string,
+  lessonId: string,
+  { positionSec, ended = false }: { positionSec: number; ended?: boolean },
+  now = new Date()
+) {
+  if (!(await canAccessLesson(userId, lessonId))) return { error: "Forbidden" } as const;
+
+  const lesson = await prisma.lesson.findUnique({
+    where: { id: lessonId },
+    select: { durationSec: true, section: { select: { courseId: true } } },
+  });
+  if (!lesson) return { error: "Not found" } as const;
+  const courseId = lesson.section.courseId;
+  const durationSec = lesson.durationSec && lesson.durationSec > 0 ? lesson.durationSec : null;
+
+  const previous = await prisma.lessonProgress.findUnique({ where: { userId_lessonId: { userId, lessonId } } });
+  const since = previous?.lastReportAt ?? previous?.lastViewedAt ?? null;
+  const elapsedSec = since ? (now.getTime() - since.getTime()) / 1000 : 0;
+  const position = Math.max(0, Math.floor(ended && durationSec ? durationSec : positionSec));
+  const { watchedSec } = creditWatchTime({
+    previousPositionSec: previous?.positionSec ?? 0,
+    positionSec: position,
+    previousWatchedSec: previous?.watchedSeconds ?? 0,
+    elapsedSec,
+    durationSec,
+  });
+  const wasCompleted = !!previous?.completed;
+  const completes = !wasCompleted && isWatchedEnough(watchedSec, durationSec);
+
+  await prisma.lessonProgress.upsert({
+    where: { userId_lessonId: { userId, lessonId } },
+    create: {
+      userId,
+      lessonId,
+      positionSec: position,
+      watchedSeconds: watchedSec,
+      lastReportAt: now,
+      ...(completes ? { completed: true, completedAt: now } : {}),
+    },
+    update: {
+      positionSec: position,
+      watchedSeconds: watchedSec,
+      lastReportAt: now,
+      ...(completes ? { completed: true, completedAt: now } : {}),
+    },
   });
 
-  // Only on completion: progress pings with completed=false must not un-complete a finished course.
-  if (completed) await recomputeCourseCompletion(courseId, userId);
-
-  revalidatePath(`/student/course/${courseId}/learn`);
-  revalidatePath("/student/dashboard");
-  revalidatePath("/student/my-courses");
-  return { ok: true, courseId } as const;
+  if (completes) {
+    await recomputeCourseCompletion(courseId, userId);
+    revalidateProgressPaths(courseId);
+  }
+  return { ok: true, courseId, watchedSec, completed: wasCompleted || completes, justCompleted: completes } as const;
 }
 
 /**

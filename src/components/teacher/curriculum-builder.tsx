@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useRef, useState } from "react";
+import { VideoUrlField } from "@/components/teacher/studio/video-url-field";
 import { useFormStatus } from "react-dom";
 import { ChevronDown, ChevronUp, FileText, ListTree, PlayCircle, Plus } from "lucide-react";
 import { toast } from "sonner";
@@ -98,7 +99,17 @@ function MoveButton({ direction, label, disabled }: { direction: "up" | "down"; 
 
 function LessonFields({ lesson }: { lesson?: Lesson }) {
   const [type, setType] = useState<"VIDEO" | "TEXT">(lesson?.type ?? "TEXT");
+  const [lengthNote, setLengthNote] = useState<string | null>(null);
+  const durationInput = useRef<HTMLInputElement>(null);
   const id = (field: string) => `${field}-${lesson?.id ?? "new"}`;
+
+  /** Fills Length from the video: always when the instructor previewed it, else only if blank. */
+  function fillDuration(seconds: number, source: "api" | "player") {
+    const input = durationInput.current;
+    if (!input || (source === "api" && input.value.trim())) return;
+    input.value = formatLessonDuration(seconds);
+    setLengthNote(source === "player" ? "Length read from the video" : "Length from YouTube");
+  }
   return (
     <>
       <div className="space-y-1.5">
@@ -126,11 +137,14 @@ function LessonFields({ lesson }: { lesson?: Lesson }) {
         <div className="space-y-1.5">
           <Label htmlFor={id("duration")}>Length</Label>
           <Input
+            ref={durationInput}
             id={id("duration")}
             name="duration"
             placeholder="mm:ss"
             defaultValue={lesson?.durationSec ? formatLessonDuration(lesson.durationSec) : ""}
+            onChange={() => setLengthNote(null)}
           />
+          {lengthNote && <p className="text-xs text-primary">{lengthNote}</p>}
         </div>
       </div>
       {type === "TEXT" ? (
@@ -139,17 +153,7 @@ function LessonFields({ lesson }: { lesson?: Lesson }) {
           <Textarea id={id("content")} name="content" defaultValue={lesson?.content ?? ""} rows={5} />
         </div>
       ) : (
-        <div className="space-y-1.5">
-          <Label htmlFor={id("video")}>Video URL</Label>
-          <Input
-            id={id("video")}
-            name="videoUrl"
-            type="url"
-            defaultValue={lesson?.videoAsset?.playbackUrl ?? ""}
-            placeholder="https://youtube.com/watch?v=..."
-          />
-          <p className="text-xs text-muted-foreground">YouTube, Vimeo, or a direct video file URL.</p>
-        </div>
+        <VideoUrlField id={id("video")} defaultValue={lesson?.videoAsset?.playbackUrl ?? ""} onDuration={fillDuration} />
       )}
       <label className="flex items-center gap-2 text-sm">
         <input type="checkbox" name="isPreview" defaultChecked={lesson?.isPreview} className="size-4 accent-primary" />

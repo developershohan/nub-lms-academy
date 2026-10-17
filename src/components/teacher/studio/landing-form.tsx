@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import { VideoUrlField } from "@/components/teacher/studio/video-url-field";
 
 const initialState: ActionState = {};
 
@@ -33,6 +34,7 @@ type Landing = {
   level: (typeof courseLevels)[number];
   language: string;
   thumbnailUrl: string | null;
+  promoVideoUrl: string | null;
 };
 
 function SaveButton() {
@@ -199,6 +201,14 @@ export function LandingForm({
             A link to a 16:9 image, at least 1280×720. Without one, the card uses the category colour and the title.
           </p>
         </div>
+
+        <VideoUrlField
+          id="promoVideoUrl"
+          name="promoVideoUrl"
+          label="Promo video (optional)"
+          defaultValue={course.promoVideoUrl ?? ""}
+          youtubeOnly
+        />
 
         {state.error && <p className="text-sm text-destructive">{state.error}</p>}
         <SaveButton />

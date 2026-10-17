@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { optionalNumber } from "@/lib/validations/common";
 import { parseLessonDuration } from "@/lib/format";
+import { parseYouTubeUrl } from "@/lib/youtube";
 
 export const courseLevels = ["BEGINNER", "INTERMEDIATE", "ADVANCED", "ALL_LEVELS"] as const;
 
@@ -42,6 +43,12 @@ export const courseLandingSchema = z.object({
     .string()
     .trim()
     .refine((url) => url === "" || (/^https?:\/\//i.test(url) && URL.canParse(url)), "Enter an image link starting with https://")
+    .optional(),
+  /** "Preview this course" on the landing page - YouTube only for now. */
+  promoVideoUrl: z
+    .string()
+    .trim()
+    .refine((url) => url === "" || parseYouTubeUrl(url) !== null, "Paste a YouTube link for the promo video")
     .optional(),
 });
 

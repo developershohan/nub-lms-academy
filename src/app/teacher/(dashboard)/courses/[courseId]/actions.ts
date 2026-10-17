@@ -1,6 +1,8 @@
 "use server";
 
 import { auth } from "@/lib/auth";
+import { getCurrentUser, hasRole } from "@/lib/permissions";
+import { checkYouTubeVideo, type YouTubeCheck } from "@/server/services/youtube-service";
 import {
   courseGoalsSchema,
   courseLandingSchema,
@@ -190,4 +192,14 @@ export async function moveLessonAction(formData: FormData): Promise<void> {
   const parsed = moveSchema.safeParse(Object.fromEntries(formData));
   if (!userId || !parsed.success) return;
   await moveLesson(parsed.data.id, userId, parsed.data.direction);
+}
+
+/** The studio's live check of a pasted video link (thumbnail, title, embeddable or not, length
+ * when YOUTUBE_API_KEY is set). Teachers only - it calls YouTube on the server's behalf. */
+export async function checkYouTubeVideoAction(url: string): Promise<YouTubeCheck> {
+  const user = await getCurrentUser();
+  if (!user || !hasRole(user.roles, "TEACHER")) {
+    return { ok: false, reason: "unknown", message: "Not authorised" };
+  }
+  return checkYouTubeVideo(String(url).slice(0, 500));
 }

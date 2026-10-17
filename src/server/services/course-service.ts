@@ -309,6 +309,7 @@ export async function updateCourseLanding(courseId: string, userId: string, data
       level: data.level,
       language: data.language,
       thumbnailUrl: data.thumbnailUrl || null,
+      promoVideoUrl: data.promoVideoUrl || null,
     },
   });
   await flagChangedSinceReview(courseId, userId, "landing page", { title: data.title });

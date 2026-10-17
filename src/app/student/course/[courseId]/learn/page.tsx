@@ -18,6 +18,9 @@ import { LessonNavBar } from "@/components/learning/lesson-nav-bar";
 import { LessonNotes } from "@/components/learning/lesson-notes";
 import { RecordLessonView } from "@/components/learning/record-lesson-view";
 import { VideoPlayer } from "@/components/learning/video-player";
+import { LessonYouTubePlayer } from "@/components/learning/lesson-youtube-player";
+import { parseYouTubeUrl } from "@/lib/youtube";
+import { resumePosition } from "@/lib/watch-progress";
 import { CourseCompleteCard, certificateHref } from "@/components/learning/course-complete-card";
 import { categoryStyle } from "@/lib/category-style";
 import { formatLessonDuration, formatTotalDuration } from "@/lib/format";
@@ -106,6 +109,8 @@ export default async function LearnPage({
   );
   const isVideo = activeLesson.type === "VIDEO";
   const playbackUrl = activeLesson.videoAsset?.playbackUrl;
+  const youtube = playbackUrl ? parseYouTubeUrl(playbackUrl) : null;
+  const nextLesson = position.next ? { href: learnHref(courseId, position.next.id), title: position.next.title } : null;
   const minutesToRead = isVideo ? 0 : readingMinutes(activeLesson.content);
   const sectionCount = course.sections.length;
   const courseFacts = [
@@ -199,7 +204,20 @@ export default async function LearnPage({
         <div className="bg-neutral-950">
           {/* Fit the 16:9 frame to the screen height so the whole video shows without scrolling. */}
           <div className="mx-auto w-full max-w-[calc((100svh-11rem)*16/9)]">
-            {playbackUrl ? (
+            {youtube ? (
+              <LessonYouTubePlayer
+                key={activeLesson.id}
+                lessonId={activeLesson.id}
+                videoId={youtube.videoId}
+                title={activeLesson.title}
+                startSec={resumePosition(
+                  progressMap.get(activeLesson.id)?.positionSec ?? 0,
+                  activeLesson.durationSec,
+                  youtube.startSec
+                )}
+                next={nextLesson}
+              />
+            ) : playbackUrl ? (
               <VideoPlayer url={playbackUrl} title={activeLesson.title} className="rounded-none" />
             ) : (
               <div className="flex aspect-video items-center justify-center px-6 text-center text-sm text-white/70">

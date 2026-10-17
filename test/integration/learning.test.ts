@@ -83,11 +83,11 @@ describe("resuming a course", () => {
     await expect(getCourseProgress(student.id, course.id)).resolves.toMatchObject({ lastLessonId: null });
 
     await recordLessonView(student.id, first.id, new Date("2026-10-17T10:00:00Z"));
-    await recordLessonProgress(student.id, first.id, 0, true);
+    await recordLessonProgress(student.id, first.id, true);
     await recordLessonView(student.id, third.id, new Date("2026-10-17T10:05:00Z"));
     await recordLessonView(student.id, second.id, new Date("2026-10-17T10:10:00Z"));
     // Completing an older lesson later must not move the resume point back to it.
-    await recordLessonProgress(student.id, third.id, 0, true);
+    await recordLessonProgress(student.id, third.id, true);
 
     await expect(getCourseProgress(student.id, course.id)).resolves.toEqual({
       totalLessons: 3,

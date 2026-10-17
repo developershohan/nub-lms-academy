@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { categoryStyle } from "@/lib/category-style";
 import { formatHoursOfContent, formatPrice } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { CoursePromo } from "@/components/course/course-promo";
 
 export type CoursePricing = { price: number; salePrice: number | null; effectivePrice: number };
 
@@ -26,6 +27,7 @@ export function PriceTag({ pricing, compact = false }: { pricing: CoursePricing;
 export function CourseBuyBox({
   title,
   thumbnailUrl,
+  promoVideoUrl = null,
   category,
   pricing,
   stats,
@@ -34,6 +36,8 @@ export function CourseBuyBox({
 }: {
   title: string;
   thumbnailUrl: string | null;
+  /** When set, the cover plays this video ("Preview this course"). */
+  promoVideoUrl?: string | null;
   category: { name: string; slug: string } | null;
   pricing: CoursePricing;
   stats: { videoCount: number; articleCount: number; quizCount: number; totalDurationSec: number };
@@ -51,18 +55,28 @@ export function CourseBuyBox({
     { icon: Award, text: "Certificate of completion" },
   ].filter(Boolean) as { icon: typeof Clock; text: string }[];
 
+  const cover = (
+    <div className={cn("aspect-video w-full", spine?.tint ?? "bg-muted")}>
+      {thumbnailUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={thumbnailUrl} alt={promoVideoUrl ? "" : `${title} cover`} className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full items-end p-4">
+          <span className={cn("font-heading text-xl font-semibold leading-tight opacity-80", spine?.onTint)}>{title}</span>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="overflow-hidden rounded-xl border bg-card shadow-sm lg:shadow-lg">
-      <div className={cn("aspect-video w-full", spine?.tint ?? "bg-muted")}>
-        {thumbnailUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={thumbnailUrl} alt={`${title} cover`} className="h-full w-full object-cover" />
-        ) : (
-          <div className="flex h-full items-end p-4">
-            <span className={cn("font-heading text-xl font-semibold leading-tight opacity-80", spine?.onTint)}>{title}</span>
-          </div>
-        )}
-      </div>
+      {promoVideoUrl ? (
+        <CoursePromo title={title} url={promoVideoUrl}>
+          {cover}
+        </CoursePromo>
+      ) : (
+        cover
+      )}
       <div className="space-y-4 p-5">
         <PriceTag pricing={pricing} />
         {isSubscriptionIncluded && (

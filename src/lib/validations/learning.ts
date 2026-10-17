@@ -5,9 +5,17 @@ export const reviewSchema = z.object({
   comment: z.string().optional(),
 });
 
+/** Marking complete. watchedSeconds is still accepted from older clients but ignored - watch time
+ * only comes from capped video reports (videoProgressSchema). */
 export const progressSchema = z.object({
-  watchedSeconds: z.coerce.number().int().min(0),
+  watchedSeconds: z.coerce.number().int().min(0).optional(),
   completed: z.coerce.boolean().optional(),
+});
+
+/** A video player's report: its position, and whether playback reached the end. */
+export const videoProgressSchema = z.object({
+  positionSec: z.number().min(0).max(24 * 3600),
+  ended: z.boolean().optional(),
 });
 
 export const LESSON_NOTE_MAX_LENGTH = 20_000;

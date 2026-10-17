@@ -11,6 +11,7 @@ A production-oriented, role-based learning management system built with Next.js.
 - [Prerequisites](#prerequisites)
 - [Local development](#local-development)
 - [Environment variables](#environment-variables)
+- [Lesson videos](#lesson-videos)
 - [Database workflow](#database-workflow)
 - [Available commands](#available-commands)
 - [User roles](#user-roles)
@@ -141,6 +142,9 @@ STRIPE_WEBHOOK_SECRET=""
 RESEND_API_KEY=""
 EMAIL_FROM="NUB Academy <onboarding@resend.dev>"
 
+# Optional: YouTube Data API v3 key, for automatic lesson lengths in the studio.
+YOUTUBE_API_KEY=""
+
 NEXT_PUBLIC_SOCKET_URL="http://localhost:3001"
 SOCKET_SERVER_URL="http://localhost:3001"
 SOCKET_PORT="3001"
@@ -210,6 +214,7 @@ Open [http://localhost:3000](http://localhost:3000). The socket server listens o
 | `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` | Browser | Optional | Stripe public key |
 | `STRIPE_WEBHOOK_SECRET` | Next.js | Optional | Verifies Stripe webhook signatures |
 | `RESEND_API_KEY` | Next.js | Optional | Sends verification and password-reset emails |
+| `YOUTUBE_API_KEY` | Next.js | Optional | YouTube Data API v3 key; fills lesson lengths automatically in the studio. Without it, lengths are read from the player when the instructor previews a video |
 | `EMAIL_FROM` | Next.js | Optional | Verified sender used by Resend |
 | `NEXT_PUBLIC_SOCKET_URL` | Browser | Yes for real-time features | Public Socket.IO service URL; baked into the client build |
 | `SOCKET_SERVER_URL` | Next.js | Yes for real-time features | Server-side Socket.IO service URL |
@@ -217,6 +222,12 @@ Open [http://localhost:3000](http://localhost:3000). The socket server listens o
 | `SOCKET_CORS_ORIGIN` | Socket service | Yes | Comma-separated list of allowed web origins, without trailing slashes |
 
 Never commit `.env` files or real credentials. Variables prefixed with `NEXT_PUBLIC_` are exposed to browser code and must never contain secrets.
+
+## Lesson videos
+
+Lessons play YouTube videos through the YouTube IFrame Player API on the privacy-enhanced youtube-nocookie.com host. The player reports progress every 15 seconds and on pause and end; the server credits watch time only up to the real time that has passed (at most 2x speed), and completes a lesson once 90% of its length has been watched.
+
+Ask instructors to upload lesson videos to YouTube as **Unlisted** with **Allow embedding** turned on. The studio checks each link and warns when a video is private, removed, or doesn't allow embedding. Unlisted videos stay out of YouTube search, but anyone who has the link can still watch or share it: YouTube offers no access control. Paid content that needs real protection should move to a video provider with signed playback; Mux is the chosen one for later.
 
 ## Database workflow
 

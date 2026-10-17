@@ -36,6 +36,7 @@ export default async function CourseLandingPage({ params }: { params: Promise<{ 
           level: course.level,
           language: course.language,
           thumbnailUrl: course.thumbnailUrl,
+          promoVideoUrl: course.promoVideoUrl,
         }}
       />
     </div>
