@@ -47,6 +47,15 @@ export function mergeMessages(current: ChatMessage[], incoming: ChatMessage[]) {
     if (message.clientMsgId) byId.delete(`pending:${message.clientMsgId}`);
     byId.set(message.id, message);
   }
+  // A quoted message was edited or removed: the quotes in its replies follow.
+  const quoted = new Map(incoming.filter((m) => !m.pending && !m.failed).map((m) => [m.id, m]));
+  for (const [id, m] of byId) {
+    const source = m.replyTo ? quoted.get(m.replyTo.id) : undefined;
+    if (!source || !m.replyTo) continue;
+    const deleted = !!source.deletedAt;
+    const preview = deleted ? "" : source.content.slice(0, 140);
+    if (m.replyTo.preview !== preview || m.replyTo.deleted !== deleted) byId.set(id, { ...m, replyTo: { ...m.replyTo, preview, deleted } });
+  }
   return [...byId.values()].sort((a, b) => sortKey(a) - sortKey(b) || a.createdAt.localeCompare(b.createdAt));
 }
 
@@ -118,9 +127,12 @@ export function useChatThread({
   const join = useCallback(() => {
     if (!socket?.connected || !conversationId) return;
     socket.timeout(ACK_TIMEOUT_MS).emit("conversation:join", conversationId, (err: Error | null, res?: { online?: string[]; error?: string }) => {
-      if (!err && res?.online) setOnline(new Set(res.online));
+      if (err || res?.error) return;
+      if (res?.online) setOnline(new Set(res.online));
+      // Only once the room is joined: the server ignores "viewing" for a room this socket isn't in,
+      // and the join's access check makes it land after an immediately-sent "viewing".
+      socket.emit("conversation:viewing", document.visibilityState === "visible" ? conversationId : null);
     });
-    socket.emit("conversation:viewing", document.visibilityState === "visible" ? conversationId : null);
   }, [socket, conversationId]);
 
   // Open a conversation: reset, join its room, load the newest page.

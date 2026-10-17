@@ -113,6 +113,10 @@ export function registerChatEvents(ctx: GatewayContext, socket: GatewaySocket) {
       const room = conversationRoom(conversationId);
       socket.join(room);
       socket.to(room).emit("user:online", { userId: user.id });
+      if (socket.data.viewingRequested === conversationId && socket.data.viewing !== conversationId) {
+        socket.data.viewing = conversationId;
+        await presence.touchViewing([{ userId: user.id, conversationId }]);
+      }
       // Who else is online, from the presence keys - so it holds across nodes, not just this one.
       const members = await prisma.conversationParticipant.findMany({
         where: { conversationId, removedAt: null, userId: { not: user.id } },
@@ -144,6 +148,7 @@ export function registerChatEvents(ctx: GatewayContext, socket: GatewaySocket) {
     safely("conversation:viewing", async (conversationId: unknown) => {
       const userId = socket.data.user.id;
       const previous = socket.data.viewing;
+      socket.data.viewingRequested = isId(conversationId) ? conversationId : null;
       const next = isId(conversationId) && socket.rooms.has(conversationRoom(conversationId)) ? conversationId : null;
       socket.data.viewing = next;
       if (previous && previous !== next) {

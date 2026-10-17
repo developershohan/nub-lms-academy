@@ -227,8 +227,10 @@ describe.skipIf(!redisUrl)("real-time socket server on Redis", () => {
     const watcher = connectAs(nodeB.url, watching.id);
     const awaySocket = connectAs(nodeB.url, away.id);
     await Promise.all([connected(senderSocket), connected(watcher), connected(awaySocket)]);
-    await join(watcher, group.conversationId);
+    // Sent back to back, as a client may: "viewing" must still count once the join lands.
+    const joined = join(watcher, group.conversationId);
     watcher.emit("conversation:viewing", group.conversationId);
+    await joined;
     const presence = createRedisPresence(getSharedRedis()!);
     await eventually(async () => (await presence.viewing([{ userId: watching.id, conversationId: group.conversationId }]))[0]);
 

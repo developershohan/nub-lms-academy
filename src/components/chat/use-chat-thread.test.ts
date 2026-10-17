@@ -43,4 +43,17 @@ describe("mergeMessages", () => {
     expect(mergeMessages([pending], [message(5)]).map((m) => m.id)).toEqual(["m5", "pending:x"]);
     expect(newestSeq([message(5), pending])).toBe(5);
   });
+
+  it("updates the quote in replies when the quoted message is edited or removed", () => {
+    const quote = { id: "m1", seq: 1, senderName: "Amina", preview: "message 1", deleted: false };
+    const reply = message(2, { replyTo: quote });
+
+    const edited = mergeMessages([message(1), reply], [message(1, { content: "message 1, edited", editedAt: new Date().toISOString() })]);
+    expect(edited[1].replyTo).toEqual({ ...quote, preview: "message 1, edited" });
+
+    const removed = mergeMessages(edited, [message(1, { content: "", deletedAt: new Date().toISOString() })]);
+    expect(removed[1].replyTo).toEqual({ ...quote, preview: "", deleted: true });
+    // Unrelated updates leave replies untouched (same object, no re-render).
+    expect(mergeMessages(removed, [message(3)])[1]).toBe(removed[1]);
+  });
 });

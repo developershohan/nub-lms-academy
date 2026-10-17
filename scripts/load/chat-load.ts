@@ -196,8 +196,8 @@ class LoadClient {
       this.reconnectTimes.push(Date.now() - this.disconnectedAt);
       this.disconnectedAt = null;
     }
-    this.socket.emit("conversation:join", this.member.conversationId, () => {});
-    this.socket.emit("conversation:viewing", this.member.conversationId);
+    // "viewing" counts only for a joined room, so it follows the join's ack (as in the browser).
+    this.socket.emit("conversation:join", this.member.conversationId, () => this.socket.emit("conversation:viewing", this.member.conversationId));
     if (this.maxSeq > 0 && !this.socket.recovered) this.sync();
     for (const [clientMsgId, p] of this.pending) this.transmit(clientMsgId, p.content);
   }

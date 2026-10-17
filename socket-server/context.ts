@@ -11,6 +11,9 @@ export type SocketData = {
   user: ChatUser;
   /** The conversation this tab has on screen, if any. */
   viewing: string | null;
+  /** What the tab last said it has on screen, joined or not yet: a "viewing" that overtakes its
+   * own conversation:join (the join awaits an access check) takes effect once the join lands. */
+  viewingRequested?: string | null;
   /** Last time a typing:start was relayed, per conversation - typing is throttled. */
   typingAt: Record<string, number>;
 };
