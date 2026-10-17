@@ -8,6 +8,18 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    services:
+      # For the real-time integration suite (two socket nodes on the Redis adapter). It is flushed
+      # between tests, which is fine for a throwaway container.
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     env:
       # Placeholder only - prisma generate/validate and the Next.js build never open a real
       # connection (every route in this app renders dynamically, nothing queries the DB at build
@@ -21,6 +33,7 @@ jobs:
       NEXT_PUBLIC_SOCKET_URL: "http://localhost:3001"
       SOCKET_SERVER_URL: "http://localhost:3001"
       SOCKET_INTERNAL_SECRET: "ci-only-placeholder-not-a-real-secret"
+      TEST_REDIS_URL: "redis://localhost:6379"
     steps:
       - uses: actions/checkout@v4
 
@@ -40,4 +53,5 @@ jobs:
       # Real services against a throwaway PostgreSQL started by the tests themselves
       # (embedded-postgres) - never the DATABASE_URL above.
       - run: npm run test:integration
+      - run: npm run build:services
       - run: npm run build

@@ -171,6 +171,8 @@ describe("one conversation per pair, course and support thread", () => {
       getOrCreateCourseGroupConversation(teacher.id, course.id),
     ]);
     expect(new Set(opens.map((o) => (o.ok ? o.conversationId : null))).size).toBe(1);
-    expect(await prisma.conversation.count({ where: { type: "COURSE_GROUP" } })).toBe(1);
+    // One #general, plus the #announcements and #q-and-a channels that come with every course.
+    expect(await prisma.conversation.count({ where: { type: "COURSE_GROUP", channel: "GENERAL" } })).toBe(1);
+    expect(await prisma.conversation.count({ where: { type: "COURSE_GROUP" } })).toBe(3);
   });
 });

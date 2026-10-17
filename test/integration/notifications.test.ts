@@ -1,4 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// No job queue here: emails go out directly, so the preference checks below can see them. The
+// queued path (with Redis) is covered by realtime.test.ts.
+vi.mock("@/server/realtime/queues", () => ({ enqueueDelivery: vi.fn().mockResolvedValue(false), getQueue: () => null, closeQueues: vi.fn() }));
+
 import { prisma } from "@/lib/prisma";
 import { emitRealtime } from "@/lib/realtime";
 import { sendNotificationEmail } from "@/lib/email";
@@ -86,15 +91,15 @@ describe("preferences", () => {
     expect(sendNotificationEmail).toHaveBeenCalledWith(emailed.email, expect.objectContaining({ title: "New 5-star review" }));
   });
 
-  it("keeps locked channels on whatever is saved, and never emails chat", async () => {
+  it("keeps locked channels on whatever is saved, and never emails chat at once (that's the digest later)", async () => {
     const user = await createUser();
     await updateNotificationPreferences(user.id, [
       { category: "account", inApp: false, email: false },
-      { category: "messages", inApp: true, email: true },
+      { category: "messages", inApp: true, email: true, push: false },
     ]);
     const prefs = new Map((await getNotificationPreferences(user.id)).map((p) => [p.category, p]));
     expect(prefs.get("account")).toMatchObject({ inApp: true, email: false });
-    expect(prefs.get("messages")).toMatchObject({ inApp: true, email: false });
+    expect(prefs.get("messages")).toMatchObject({ inApp: true, email: true, push: false });
 
     await notify([user.id], { type: "message", title: "Hi" });
     expect(sendNotificationEmail).not.toHaveBeenCalled();
