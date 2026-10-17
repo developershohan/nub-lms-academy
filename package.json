@@ -7,6 +7,7 @@
     "dev:socket": "tsx watch socket-server/index.ts",
     "dev:worker": "tsx watch worker/index.ts",
     "build": "next build",
+    "vercel-build": "node scripts/vercel-build.mjs",
     "build:services": "node scripts/build-services.mjs",
     "postinstall": "prisma generate",
     "start": "next start",

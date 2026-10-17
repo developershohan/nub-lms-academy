@@ -125,6 +125,8 @@ AUTH_URL="http://localhost:3000"
 NEXTAUTH_URL="http://localhost:3000"
 
 DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require"
+# Optional locally. Direct (non-pooled) connection for Prisma CLI commands such as migrations.
+DIRECT_URL=""
 
 AUTH_SECRET="replace-with-a-long-random-secret"
 NEXTAUTH_SECRET="replace-with-the-same-value-as-AUTH_SECRET"
@@ -205,7 +207,8 @@ Open [http://localhost:3000](http://localhost:3000). The socket server listens o
 
 | Variable | Used by | Required | Purpose |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | Both services | Yes | PostgreSQL connection string |
+| `DATABASE_URL` | Both services | Yes | PostgreSQL connection string used at runtime. On Neon, use the pooled (`-pooler`) endpoint |
+| `DIRECT_URL` | Prisma CLI | Yes in Vercel Production | Direct (non-pooled) connection used by `prisma migrate` and other CLI commands; falls back to `DATABASE_URL` when unset. On Neon, the same connection string without `-pooler` in the host. Add it to the Vercel project's **Production** environment so deploys can apply migrations |
 | `AUTH_SECRET` | Both services | Yes | Signs Auth.js sessions and socket tokens |
 | `NEXTAUTH_SECRET` | Next.js | Yes | Compatibility alias; keep equal to `AUTH_SECRET` |
 | `SOCKET_INTERNAL_SECRET` | Both services | Yes | Protects server-to-server real-time event requests |
@@ -240,7 +243,7 @@ npx prisma generate
 # Create and apply a migration during development
 npx prisma migrate dev --name describe_the_change
 
-# Apply committed migrations in production
+# Apply committed migrations in production (Vercel production deploys do this automatically)
 npx prisma migrate deploy
 
 # Validate the schema
@@ -255,6 +258,10 @@ npx prisma db seed
 
 Commit schema changes and the generated migration directory together. Never use `prisma migrate dev` against a production database, and do not edit a migration after it has been applied to a shared environment.
 
+Prisma CLI commands connect through `DIRECT_URL` when it is set and `DATABASE_URL` otherwise (see `prisma.config.ts`). The application itself always uses `DATABASE_URL`.
+
+Production deploys on Vercel run `npm run vercel-build`, which applies pending migrations with `prisma migrate deploy` before `next build`. If a migration fails, the build fails and the previous deployment keeps serving. Migrations run before the new code goes live, so the code that is still serving must keep working against the migrated schema. Keep migrations additive, and remove columns in a later release once nothing reads them.
+
 ## Available commands
 
 | Command | Description |
@@ -263,6 +270,7 @@ Commit schema changes and the generated migration directory together. Never use 
 | `npm run dev:socket` | Start the Socket.IO server in watch mode |
 | `npm run dev:worker` | Start the background worker in watch mode (needs Redis) |
 | `npm run build` | Create a production Next.js build |
+| `npm run vercel-build` | Vercel's build command: runs `prisma migrate deploy` when `VERCEL_ENV` is `production`, then `next build` |
 | `npm run build:services` | Compile the socket server and worker to `dist/` with esbuild |
 | `npm run start` | Run the built Next.js application |
 | `npm run start:socket` | Build and run the compiled Socket.IO server |
@@ -323,10 +331,10 @@ When changing authorization, payments, enrollment, quizzes, or database transact
 ### Next.js application
 
 1. Import the repository into Vercel or another Node.js-compatible host.
-2. Configure the production environment variables listed above.
+2. Configure the production environment variables listed above, including `DIRECT_URL` in the **Production** environment.
 3. Set all application URLs to their HTTPS production values.
-4. Run `npx prisma migrate deploy` as a controlled release step.
-5. Build with `npm run build` and start with `npm run start` when not using Vercel defaults.
+4. Leave the Vercel build command at its default. Vercel then runs `npm run vercel-build`, which applies pending migrations on production deploys only. Preview deploys skip migrations, which matters if they share the production database.
+5. On other hosts, run `npx prisma migrate deploy` as a release step, then build with `npm run build` and start with `npm run start`.
 
 ### Socket.IO service
 

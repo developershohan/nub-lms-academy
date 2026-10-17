@@ -71,7 +71,9 @@ export default async function setup(project: TestProject) {
   const databaseUrl = `postgresql://postgres:postgres@localhost:${port}/lms_integration`;
   execSync("npx prisma migrate deploy", {
     cwd: path.resolve(__dirname, "../.."),
-    env: { ...process.env, DATABASE_URL: databaseUrl },
+    // prisma.config.ts prefers DIRECT_URL, so override both - otherwise a DIRECT_URL in .env would
+    // send these migrations to a real database.
+    env: { ...process.env, DATABASE_URL: databaseUrl, DIRECT_URL: databaseUrl },
     stdio: "pipe",
   });
   project.provide("databaseUrl", databaseUrl);
