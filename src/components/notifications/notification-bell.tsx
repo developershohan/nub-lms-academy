@@ -83,7 +83,16 @@ export function NotificationBell({
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<Button variant="ghost" size="sm" className="relative" />}>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            className="relative"
+            aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications"}
+          />
+        }
+      >
         <Bell className="size-4" />
         {unreadCount > 0 && (
           <Badge variant="destructive" className="absolute -right-1 -top-1 h-4 min-w-4 justify-center px-1 text-[10px]">
@@ -91,7 +100,7 @@ export function NotificationBell({
           </Badge>
         )}
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-80">
+      <DropdownMenuContent align="end" className="w-[min(20rem,calc(100vw-2rem))]">
         <DropdownMenuGroup>
           <DropdownMenuLabel className="flex items-center justify-between">
             Notifications

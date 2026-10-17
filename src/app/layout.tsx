@@ -47,6 +47,12 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
+          <a
+            href="#main-content"
+            className="sr-only rounded-md bg-primary text-sm font-medium text-primary-foreground shadow-lg outline-2 outline-offset-2 outline-ring focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-100 focus:px-4 focus:py-2"
+          >
+            Skip to content
+          </a>
           <NextTopLoader showSpinner={false} />
           {children}
           <Toaster />
