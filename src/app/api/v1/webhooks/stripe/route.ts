@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { getStripeClient } from "@/lib/stripe";
-import { handleStripeWebhookEvent } from "@/server/services/order-service";
-import { handleSubscriptionWebhookEvent } from "@/server/services/subscription-service";
+import { processStripeEvent } from "@/server/services/stripe-webhook-service";
 
 export async function POST(request: Request) {
   const stripe = getStripeClient();
@@ -22,11 +21,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 
-  // Order and subscription events never overlap (each handler no-ops on event types it doesn't
-  // own), so both are always dispatched - this was previously imported but never called, meaning
-  // subscription lifecycle events (renewal, cancellation, payment failure) were acknowledged to
-  // Stripe but silently never applied to our subscription records.
-  await handleStripeWebhookEvent(event);
-  await handleSubscriptionWebhookEvent(event);
-  return NextResponse.json({ received: true });
+  try {
+    const { duplicate } = await processStripeEvent(event);
+    return NextResponse.json({ received: true, duplicate });
+  } catch (err) {
+    // A non-2xx makes Stripe retry the delivery later (processStripeEvent released the event).
+    console.error(`Stripe webhook ${event.type} (${event.id}) failed:`, err instanceof Error ? err.message : err);
+    return NextResponse.json({ error: "Webhook handling failed" }, { status: 500 });
+  }
 }

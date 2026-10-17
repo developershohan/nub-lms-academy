@@ -13,6 +13,7 @@ const STATUS_VARIANT: Record<string, "secondary" | "outline" | "destructive"> = 
   FAILED: "destructive",
   CANCELLED: "outline",
   REFUNDED: "outline",
+  DISPUTED: "destructive",
 };
 
 export default async function AdminOrdersPage() {

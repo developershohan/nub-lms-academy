@@ -534,6 +534,8 @@ enum OrderStatus {
   FAILED
   CANCELLED
   REFUNDED
+  /// A chargeback is open in Stripe: access is suspended until it closes (won -> PAID, lost -> REFUNDED).
+  DISPUTED
 }
 
 enum DiscountType {
@@ -568,6 +570,7 @@ model Order {
 
   @@index([userId])
   @@index([status])
+  @@index([stripePaymentIntentId])
 }
 
 model OrderItem {
@@ -778,4 +781,13 @@ model RateLimit {
   key     String   @id
   count   Int
   resetAt DateTime
+}
+
+/// Stripe webhook events already handled, keyed by Stripe's event id. Stripe delivers at least
+/// once, so a redelivered event is acknowledged without being applied twice
+/// (src/server/services/stripe-webhook-service.ts).
+model StripeEvent {
+  id         String   @id
+  type       String
+  receivedAt DateTime @default(now())
 }

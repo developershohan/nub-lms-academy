@@ -5,7 +5,7 @@ import { canManageCourse, canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { slugify } from "@/lib/slug";
 import { recomputeCourseCompletion } from "@/server/services/progress-service";
-import { createNotifications } from "@/server/services/notification-service";
+import { notifyAdmins } from "@/server/services/notification-service";
 import type { CourseDetailsInput, LessonInput } from "@/lib/validations/course";
 
 function linesToItems(text: string | undefined) {
@@ -53,21 +53,12 @@ async function flagChangedSinceReview(
   await logAudit(actorId, "course:changed-after-review", "Course", courseId, { change, ...details });
   if (course.changedSinceReviewAt) return; // admins were already told about this round of changes
 
-  const admins = await prisma.user.findMany({
-    where: { status: "ACTIVE", roles: { some: { role: { name: { in: ["ADMIN", "SUPER_ADMIN"] } } } } },
-    select: { id: true },
+  await notifyAdmins({
+    type: "course-review",
+    title: `"${course.title}" changed after review`,
+    body: `The teacher changed: ${change}`,
+    link: "/admin/courses",
   });
-  if (admins.length) {
-    await createNotifications(
-      admins.map((admin) => ({
-        userId: admin.id,
-        type: "course-review",
-        title: `"${course.title}" changed after review`,
-        body: `The teacher changed: ${change}`,
-        link: "/admin/courses",
-      }))
-    );
-  }
 }
 
 export function listPublishedCourses({ q, categorySlug }: { q?: string; categorySlug?: string } = {}) {

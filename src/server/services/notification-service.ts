@@ -20,6 +20,17 @@ export async function createNotifications(notifications: NotificationInput[]) {
   return result;
 }
 
+/** Sends one notification to every active admin - for things that need an admin to act
+ * (a disputed payment, a course changed after review). */
+export async function notifyAdmins(notification: Omit<NotificationInput, "userId">) {
+  const admins = await prisma.user.findMany({
+    where: { status: "ACTIVE", roles: { some: { role: { name: { in: ["ADMIN", "SUPER_ADMIN"] } } } } },
+    select: { id: true },
+  });
+  if (admins.length === 0) return;
+  await createNotifications(admins.map((admin) => ({ ...notification, userId: admin.id })));
+}
+
 export function listNotificationsForUser(userId: string, limit = 20) {
   return prisma.notification.findMany({
     where: { userId },

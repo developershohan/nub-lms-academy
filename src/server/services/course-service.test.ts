@@ -9,11 +9,11 @@ vi.mock("@/lib/permissions", () => ({
 }));
 vi.mock("@/lib/audit", () => ({ logAudit: vi.fn() }));
 vi.mock("@/server/services/progress-service", () => ({ recomputeCourseCompletion: vi.fn() }));
-vi.mock("@/server/services/notification-service", () => ({ createNotifications: vi.fn() }));
+vi.mock("@/server/services/notification-service", () => ({ notifyAdmins: vi.fn() }));
 
 import { prisma as prismaClient } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
-import { createNotifications } from "@/server/services/notification-service";
+import { notifyAdmins } from "@/server/services/notification-service";
 import { approveCourse, markCourseReviewed, updateLesson } from "./course-service";
 
 const prisma = prismaClient as unknown as PrismaMock;
@@ -22,7 +22,6 @@ const videoLesson = { title: "Intro", type: "VIDEO" as const, videoUrl: "https:/
 function givenLessonInCourse(course: { status: string; changedSinceReviewAt: Date | null }) {
   prisma.lesson.findUnique.mockResolvedValue({ section: { courseId: "course-1" } });
   prisma.course.findUnique.mockResolvedValue({ title: "Web Basics", ...course });
-  prisma.user.findMany.mockResolvedValue([{ id: "admin-1" }, { id: "admin-2" }]);
 }
 
 beforeEach(() => {
@@ -47,10 +46,9 @@ describe("edits after review", () => {
       "course-1",
       expect.objectContaining({ change: "lesson edited", videoUrl: "https://example.com/other-video" })
     );
-    expect(createNotifications).toHaveBeenCalledWith([
-      expect.objectContaining({ userId: "admin-1", link: "/admin/courses" }),
-      expect.objectContaining({ userId: "admin-2" }),
-    ]);
+    expect(notifyAdmins).toHaveBeenCalledWith(
+      expect.objectContaining({ title: '"Web Basics" changed after review', link: "/admin/courses" })
+    );
   });
 
   it("logs further changes but only notifies admins once per round", async () => {
@@ -59,7 +57,7 @@ describe("edits after review", () => {
     await updateLesson("lesson-1", "teacher-1", videoLesson);
 
     expect(logAudit).toHaveBeenCalled();
-    expect(createNotifications).not.toHaveBeenCalled();
+    expect(notifyAdmins).not.toHaveBeenCalled();
   });
 
   it("leaves drafts alone - they're reviewed when submitted", async () => {
