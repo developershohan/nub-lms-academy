@@ -1,6 +1,6 @@
 "use server";
 
-import { auth } from "@/lib/auth";
+import { auth, signOut } from "@/lib/auth";
 import { updateProfileSchema, changeEmailSchema, changePasswordSchema } from "@/lib/validations/profile";
 import { updateProfile, changeEmail, changePassword } from "@/server/services/user-service";
 import { resendVerificationEmail } from "@/server/services/auth-service";
@@ -42,7 +42,11 @@ export async function changePasswordAction(_prevState: ActionState, formData: Fo
   if (!parsed.success) return { error: parsed.error.issues[0].message };
 
   const result = await changePassword(userId, parsed.data.currentPassword, parsed.data.newPassword);
-  return "error" in result ? { error: result.error } : { success: true };
+  if ("error" in result) return { error: result.error };
+  // The change ended every session (sessionVersion), this one included - sign out cleanly and
+  // send them to log in with the new password rather than failing on their next click.
+  await signOut({ redirectTo: "/login" });
+  return { success: true };
 }
 
 export async function resendOwnVerificationAction() {

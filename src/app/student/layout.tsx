@@ -13,10 +13,11 @@ const NAV = [
 ];
 
 export default async function StudentLayout({ children }: { children: React.ReactNode }) {
+  // Any active account may use the learner area: what each page shows is gated per course by
+  // canAccessCourse, and admins (reviewing a course before approval) and teachers (previewing
+  // their own) need the learn page without holding the STUDENT role.
   const user = await getCurrentUser();
-  if (!user || !(user.roles.includes("STUDENT") || user.roles.includes("SUPER_ADMIN"))) {
-    redirect("/login");
-  }
+  if (!user) redirect("/login");
   const { notifications, unreadCount } = await getNotificationBellProps(user.id);
   return (
     <DashboardShell title="Student" navItems={NAV} notifications={notifications} unreadCount={unreadCount}>

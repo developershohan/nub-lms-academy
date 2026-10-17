@@ -91,13 +91,21 @@ export async function listClassmates(userId: string) {
 /** Manual enrollment by email - the owning teacher (their own course) or an admin (any course).
  * Requires an existing, active account; does not auto-create one (see docs/security.md's manual-
  * assignment decision). Uses the ADMIN_GRANT source since it bypasses the normal free/purchase
- * eligibility checks entirely - this is a deliberate override, not a self-service enrollment. */
+ * eligibility checks entirely - this is a deliberate override, not a self-service enrollment.
+ * A teacher may only grant their own FREE courses: free access to a paid course is revenue the
+ * platform shares, so it stays an admin decision (and is audit-logged either way). */
 export async function enrollUserByEmail(actorId: string, courseId: string, email: string) {
-  const allowed = (await canManageCourse(actorId, courseId)) || (await canAdminAccess(actorId));
-  if (!allowed) return { error: "Forbidden" } as const;
+  const isAdmin = await canAdminAccess(actorId);
+  if (!isAdmin && !(await canManageCourse(actorId, courseId))) return { error: "Forbidden" } as const;
 
-  const course = await prisma.course.findUnique({ where: { id: courseId }, select: { title: true, slug: true } });
+  const course = await prisma.course.findUnique({
+    where: { id: courseId },
+    select: { title: true, slug: true, price: true, salePrice: true },
+  });
   if (!course) return { error: "Course not found" } as const;
+  if (!isAdmin && Number(course.salePrice ?? course.price) > 0) {
+    return { error: "Only an admin can give free access to a paid course" } as const;
+  }
 
   const target = await prisma.user.findUnique({ where: { email: email.trim().toLowerCase() } });
   if (!target || target.status !== "ACTIVE") return { error: "No active account found with that email" } as const;

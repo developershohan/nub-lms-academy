@@ -45,6 +45,9 @@ model User {
   phone         String?
   address       String?
   status        UserStatus @default(ACTIVE)
+  /// Bumped on ban, password change and password reset. Every JWT carries the version it was
+  /// issued under and is rejected once they differ, so those events sign out every session.
+  sessionVersion Int       @default(0)
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
 
@@ -219,6 +222,9 @@ model Course {
   status                 CourseStatus @default(DRAFT)
   rejectionReason        String?
   publishedAt            DateTime?
+  /// Set when the teacher edits an APPROVED or PUBLISHED course (details, price, lessons), so an
+  /// admin re-reviews it; cleared by "Mark reviewed". The course stays live meanwhile.
+  changedSinceReviewAt   DateTime?
   createdAt              DateTime     @default(now())
   updatedAt              DateTime     @updatedAt
 
@@ -764,4 +770,12 @@ model PlatformSetting {
   id                  String   @id @default("singleton")
   autoApprovePayments Boolean  @default(true)
   updatedAt           DateTime @updatedAt
+}
+
+/// Fixed-window counters for rate limiting sign-in, sign-up and password reset (src/lib/rate-limit.ts).
+/// Postgres-backed until Redis arrives in the real-time phase; one tiny row per key.
+model RateLimit {
+  key     String   @id
+  count   Int
+  resetAt DateTime
 }

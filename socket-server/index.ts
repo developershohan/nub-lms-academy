@@ -64,6 +64,28 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
+  if (req.method === "POST" && req.url === "/internal/disconnect") {
+    if (!INTERNAL_SECRET || req.headers["x-internal-secret"] !== INTERNAL_SECRET) {
+      res.writeHead(401).end();
+      return;
+    }
+
+    let body = "";
+    req.on("data", (chunk) => (body += chunk));
+    req.on("end", () => {
+      try {
+        // Sent on ban / password change / password reset (src/lib/realtime.ts): close every live
+        // connection of that user. A reconnect re-runs authenticateSocket, which refuses them.
+        const { userId } = JSON.parse(body) as { userId?: unknown };
+        if (typeof userId === "string" && userId) io.in(`user:${userId}`).disconnectSockets(true);
+        res.writeHead(200).end();
+      } catch {
+        res.writeHead(400).end();
+      }
+    });
+    return;
+  }
+
   // Socket.IO registers its own 'request' listener on this same server (see `new Server(httpServer, ...)`
   // below) and handles anything under /socket.io itself - leave those alone so it can respond.
   if (req.url?.startsWith("/socket.io")) return;

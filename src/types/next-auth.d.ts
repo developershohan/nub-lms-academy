@@ -21,5 +21,7 @@ declare module "@auth/core/jwt" {
     id: string;
     status: UserStatus;
     roles: RoleName[];
+    /** User.sessionVersion when the token was issued; absent on tokens from before it existed. */
+    sessionVersion?: number;
   }
 }
