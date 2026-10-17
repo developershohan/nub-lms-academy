@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/permissions";
-import { listOrdersForUser, confirmCheckoutSession } from "@/server/services/order-service";
+import { listOrdersForUser } from "@/server/services/order-service";
 import { getActiveSubscriptionForUser } from "@/server/services/subscription-service";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -26,9 +26,10 @@ export default async function BillingPage({
 
   const { session_id } = await searchParams;
   if (session_id) {
-    // Fallback for environments where the Stripe webhook isn't reachable (e.g. local dev) -
-    // verifies payment directly against Stripe so the order doesn't stay stuck on PENDING.
-    await confirmCheckoutSession(user.id, session_id);
+    // Checkout sessions created before success_url moved to the confirm route still land here.
+    // Confirming must not happen in this render - it revalidates paths, which Next.js forbids
+    // during rendering - so hand it to the route handler, which redirects back here.
+    redirect(`/api/v1/orders/confirm-checkout?session_id=${encodeURIComponent(session_id)}`);
   }
 
   const [orders, subscription] = await Promise.all([

@@ -72,7 +72,9 @@ export async function createCheckoutSession(userId: string, courseId: string, co
           quantity: 1,
         },
       ],
-      success_url: `${baseUrl}/student/billing?success=1&session_id={CHECKOUT_SESSION_ID}`,
+      // A route handler, not the billing page: confirming revalidates paths, which Next.js
+      // forbids during a page render.
+      success_url: `${baseUrl}/api/v1/orders/confirm-checkout?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/courses/${course.slug}`,
       metadata: { orderId: order.id },
     });
@@ -87,13 +89,19 @@ export async function createCheckoutSession(userId: string, courseId: string, co
 
 async function markOrderPaid(orderId: string, event: { id?: string; paymentIntentId?: string | null }) {
   const order = await prisma.order.findUnique({ where: { id: orderId }, include: { items: true } });
-  if (!order || order.status === "PAID") return; // already processed - webhook redelivery is normal
+  if (!order || order.status !== "PENDING") return; // already processed - webhook redelivery is normal
 
-  await prisma.$transaction(async (tx) => {
-    await tx.order.update({
-      where: { id: orderId },
+  // The PENDING -> PAID flip is the idempotency guard, so it has to happen inside the transaction
+  // as a conditional update: the webhook and the success-redirect fallback routinely race for the
+  // same order, and a check made before the transaction lets both of them through (two Payment
+  // rows, two enrollments upserts, a refunded order flipped back to PAID by a webhook redelivery).
+  const claimed = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.order.updateMany({
+      where: { id: orderId, status: "PENDING" },
       data: { status: "PAID", stripePaymentIntentId: event.paymentIntentId ?? undefined },
     });
+    if (count === 0) return false;
+
     await tx.payment.create({
       data: {
         orderId,
@@ -117,7 +125,9 @@ async function markOrderPaid(orderId: string, event: { id?: string; paymentInten
         update: {},
       });
     }
+    return true;
   });
+  if (!claimed) return;
 
   revalidateOrderPaths();
   revalidatePath("/student/my-courses");
@@ -129,7 +139,8 @@ async function recordCapturedPaymentIntent(orderId: string, paymentIntentId: str
   await prisma.order.update({ where: { id: orderId }, data: { stripePaymentIntentId: paymentIntentId } });
 }
 
-/** Called from the checkout success redirect as a fallback for environments where the Stripe
+/** Called from the checkout success redirect (the /api/v1/orders/confirm-checkout route - never
+ * from a page render, since it revalidates paths) as a fallback for environments where the Stripe
  * webhook isn't wired up (e.g. local dev) - verifies payment directly against Stripe instead of
  * waiting for the webhook, then finalizes the order the same way the webhook would. */
 export async function confirmCheckoutSession(userId: string, stripeSessionId: string) {
@@ -140,7 +151,13 @@ export async function confirmCheckoutSession(userId: string, stripeSessionId: st
   const stripe = getStripeClient();
   if (!stripe) return { error: "Payments aren't configured yet" } as const;
 
-  const session = await stripe.checkout.sessions.retrieve(stripeSessionId);
+  let session: Stripe.Checkout.Session;
+  try {
+    session = await stripe.checkout.sessions.retrieve(stripeSessionId);
+  } catch (err) {
+    // The webhook still finalizes the order; the student just lands on billing without it yet.
+    return { error: err instanceof Error ? err.message : "Could not verify the payment" } as const;
+  }
   if (session.payment_status !== "paid") return { ok: true, status: order.status } as const;
 
   const paymentIntentId = typeof session.payment_intent === "string" ? session.payment_intent : null;
@@ -241,14 +258,19 @@ export async function refundOrder(actorId: string, orderId: string) {
   if (!order) return { error: "Not found" } as const;
   if (order.status !== "PAID") return { error: "Only paid orders can be refunded" } as const;
 
-  if (order.stripePaymentIntentId) {
+  // Never mark an order REFUNDED unless the money actually went back: a paid order needs both a
+  // recorded payment intent and a configured Stripe client. Only a $0 (100%-coupon) order, which
+  // never touched Stripe, is refunded locally.
+  if (Number(order.total) > 0) {
+    if (!order.stripePaymentIntentId) {
+      return { error: "No Stripe payment is recorded for this order - refund it from the Stripe dashboard" } as const;
+    }
     const stripe = getStripeClient();
-    if (stripe) {
-      try {
-        await stripe.refunds.create({ payment_intent: order.stripePaymentIntentId });
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : "Stripe refund failed" } as const;
-      }
+    if (!stripe) return { error: "Stripe isn't configured, so the refund can't be sent" } as const;
+    try {
+      await stripe.refunds.create({ payment_intent: order.stripePaymentIntentId });
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : "Stripe refund failed" } as const;
     }
   }
 
