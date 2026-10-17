@@ -1,11 +1,10 @@
 import "dotenv/config";
-import http, { type IncomingMessage } from "node:http";
-import { Server } from "socket.io";
-import { authenticateSocket } from "./auth";
-import { registerChatEvents, clearRateLimit } from "./events/chat.events";
-import { createRedisAdapter } from "./redis";
+import { prisma } from "@/lib/prisma";
+import { closeQueues } from "@/server/realtime/queues";
+import { closeSharedRedis } from "@/server/realtime/redis";
+import { createGateway } from "./gateway";
 
-const REQUIRED_IN_PRODUCTION = ["AUTH_SECRET", "DATABASE_URL", "SOCKET_CORS_ORIGIN"] as const;
+const REQUIRED_IN_PRODUCTION = ["AUTH_SECRET", "DATABASE_URL", "SOCKET_CORS_ORIGIN", "REDIS_URL"] as const;
 
 if (process.env.NODE_ENV === "production") {
   const missing = REQUIRED_IN_PRODUCTION.filter((name) => !process.env[name]);
@@ -26,156 +25,35 @@ const CORS_ORIGINS = (process.env.SOCKET_CORS_ORIGIN ?? "http://localhost:3000")
   .split(",")
   .map((origin) => origin.trim().replace(/\/$/, ""))
   .filter(Boolean);
+// Redis joins the nodes up (adapter), lets Next.js publish straight to them (emitter), and holds
+// presence, rate limits and the job queue. Without it this is a single node with the /internal/*
+// HTTP bridge and in-memory presence and limits. Locally: `docker compose up -d redis`.
+const REDIS_URL = process.env.REDIS_URL ?? null;
 const INTERNAL_SECRET = process.env.SOCKET_INTERNAL_SECRET;
-// Set it to run more than one node, or to let Next.js publish straight to Redis instead of the
-// /internal/* HTTP bridge below (see src/lib/realtime.ts). Locally: `docker compose up -d redis`.
-const REDIS_URL = process.env.REDIS_URL;
-const redis = REDIS_URL ? createRedisAdapter(REDIS_URL) : null;
 
-const ENGINE_IO_ERROR_LABELS: Record<number, string> = {
-  0: "Transport unknown",
-  1: "Session ID unknown",
-  2: "Bad handshake method",
-  3: "Bad request",
-  4: "Forbidden",
-  5: "Unsupported protocol version",
-};
+const gateway = createGateway({ corsOrigins: CORS_ORIGINS, redisUrl: REDIS_URL, internalSecret: INTERNAL_SECRET });
 
-/** Lets the Next.js app (a separate process) push realtime events - e.g. "a role changed" or
- * "a new notification landed" - to already-connected clients. Next.js server actions/routes have
- * no direct handle on this process's `io` instance, so this HTTP hop is the bridge between them.
- * Guarded by a shared secret since it's an unauthenticated write into arbitrary rooms - if the
- * secret isn't configured, every request is rejected rather than left open. */
-const httpServer = http.createServer((req, res) => {
-  if (req.method === "POST" && req.url === "/internal/emit") {
-    if (!INTERNAL_SECRET || req.headers["x-internal-secret"] !== INTERNAL_SECRET) {
-      res.writeHead(401).end();
-      return;
-    }
-
-    let body = "";
-    req.on("data", (chunk) => (body += chunk));
-    req.on("end", () => {
-      try {
-        const { room, event, payload } = JSON.parse(body) as { room?: unknown; event?: unknown; payload?: unknown };
-        if (typeof room === "string" && typeof event === "string") {
-          io.to(room).emit(event, payload);
-        }
-        res.writeHead(200).end();
-      } catch {
-        res.writeHead(400).end();
-      }
-    });
-    return;
+gateway.listen(PORT).then((port) => {
+  console.log(`Socket.IO chat server listening on :${port} (CORS origins: ${CORS_ORIGINS.join(", ")}; adapter: ${REDIS_URL ? "redis" : "memory"})`);
+  if (!REDIS_URL) {
+    console.warn("REDIS_URL is not set - running as a single node with in-memory presence and rate limits; the Redis emitter is off.");
+    if (!INTERNAL_SECRET) console.warn("SOCKET_INTERNAL_SECRET is not set - /internal/* will reject every request until it is.");
   }
-
-  if (req.method === "POST" && req.url === "/internal/disconnect") {
-    if (!INTERNAL_SECRET || req.headers["x-internal-secret"] !== INTERNAL_SECRET) {
-      res.writeHead(401).end();
-      return;
-    }
-
-    let body = "";
-    req.on("data", (chunk) => (body += chunk));
-    req.on("end", () => {
-      try {
-        // Sent on ban / password change / password reset (src/lib/realtime.ts): close every live
-        // connection of that user. A reconnect re-runs authenticateSocket, which refuses them.
-        const { userId } = JSON.parse(body) as { userId?: unknown };
-        if (typeof userId === "string" && userId) io.in(`user:${userId}`).disconnectSockets(true);
-        res.writeHead(200).end();
-      } catch {
-        res.writeHead(400).end();
-      }
-    });
-    return;
-  }
-
-  // Socket.IO registers its own 'request' listener on this same server (see `new Server(httpServer, ...)`
-  // below) and handles anything under /socket.io itself - leave those alone so it can respond.
-  if (req.url?.startsWith("/socket.io")) return;
-
-  if (req.url === "/health") {
-    res.writeHead(200, { "Content-Type": "application/json" }).end(
-      JSON.stringify({
-        status: "ok",
-        service: "socket-server",
-        adapter: redis ? "redis" : "memory",
-        redis: redis ? redis.pubClient.status : undefined,
-      })
-    );
-    return;
-  }
-
-  // Anything else - most importantly Render/Railway's health-check probe hitting "/" - needs a
-  // real response. Leaving this unhandled means the request just hangs forever, which is why the
-  // host's port scanner reports "no open ports" and never routes traffic here even though the
-  // process is up and Socket.IO itself works fine.
-  res.writeHead(200, { "Content-Type": "text/plain" }).end("ok");
 });
 
-const io = new Server(httpServer, {
-  cors: { origin: CORS_ORIGINS, credentials: true },
-  ...(redis ? { adapter: redis.adapter } : {}),
-});
-
-// Handshake-level failures (bad/unknown session, unsupported protocol, malformed request) never
-// reach our own auth middleware below - this is the only place they're observable at all.
-io.engine.on(
-  "connection_error",
-  (err: { req?: IncomingMessage; code?: number; message?: string }) => {
-    const url = err.req?.url ? new URL(err.req.url, "http://internal") : null;
-    console.error("Engine.IO connection_error:", {
-      code: err.code,
-      reason: typeof err.code === "number" ? ENGINE_IO_ERROR_LABELS[err.code] : undefined,
-      message: err.message,
-      origin: err.req?.headers?.origin,
-      method: err.req?.method,
-      path: url?.pathname,
-      transport: url?.searchParams.get("transport"),
-    });
+let shuttingDown = false;
+async function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received - closing connections (clients reconnect and re-sync).`);
+  const force = setTimeout(() => process.exit(0), 10_000);
+  force.unref();
+  try {
+    await gateway.close();
+    await Promise.all([closeQueues(), closeSharedRedis(), prisma.$disconnect()]);
+  } finally {
+    process.exit(0);
   }
-);
-
-io.use((socket, next) => {
-  authenticateSocket(socket, next).catch((err) => {
-    console.error(
-      `Socket auth (${socket.id}): unexpected error:`,
-      err instanceof Error ? err.message : "unknown error"
-    );
-    next(new Error("Unauthorized"));
-  });
-});
-
-io.on("connection", (socket) => {
-  const { id: userId, roleNames } = socket.data.user;
-  console.log(`Socket connected: user ${userId}, socket ${socket.id}, transport ${socket.conn.transport.name}`);
-
-  socket.join(`user:${userId}`);
-  if (roleNames.includes("ADMIN") || roleNames.includes("SUPER_ADMIN")) socket.join("admins");
-
-  // Online/offline presence is NOT broadcast here: io.emit told every connected socket on the
-  // platform when any user came or went. It's scoped to shared conversation rooms instead - see
-  // conversation:join / conversation:leave / disconnecting in events/chat.events.ts.
-  registerChatEvents(io, socket);
-
-  socket.on("disconnect", (reason) => {
-    console.log(`Socket disconnected: user ${userId}, socket ${socket.id}, reason: ${reason}`);
-    clearRateLimit(socket.id);
-  });
-});
-
-// Binding the host explicitly matters on Render/Railway: listen(port) with no host can bind
-// IPv6-only in their containers, and their port-scanner only looks for 0.0.0.0 - without this the
-// scanner never sees the app come up and the deploy gets stuck (502s forever even though the
-// process is actually running fine).
-httpServer.listen(PORT, "0.0.0.0");
-console.log(
-  `Socket.IO chat server listening on :${PORT} (CORS origins: ${CORS_ORIGINS.join(", ")}; adapter: ${redis ? "redis" : "memory"})`
-);
-if (!redis && process.env.NODE_ENV === "production") {
-  console.warn("REDIS_URL is not set - running as a single node; scale-out and the Redis emitter are off.");
 }
-if (!INTERNAL_SECRET) {
-  console.warn("SOCKET_INTERNAL_SECRET is not set - /internal/emit will reject every request until it is.");
-}
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));

@@ -37,6 +37,9 @@ const cspDirectives = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // Node-only packages used by the web app's realtime and notification code (the Redis emitter,
+  // the job queue, web push). Bundling them into the server build breaks their dynamic requires.
+  serverExternalPackages: ["ioredis", "bullmq", "web-push", "@socket.io/redis-emitter"],
   productionBrowserSourceMaps: false,
   // Certificate PDFs read their embedded Unicode fonts from disk at request time (see
   // src/lib/certificate-pdf.ts) - make sure serverless/standalone traces ship them.

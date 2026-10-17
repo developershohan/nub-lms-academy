@@ -1,6 +1,7 @@
 import "server-only";
 import Redis from "ioredis";
 import { Emitter } from "@socket.io/redis-emitter";
+import type { RealtimeBus } from "@/server/realtime/bus";
 
 const SOCKET_SERVER_URL = process.env.SOCKET_SERVER_URL ?? "http://localhost:3001";
 const SOCKET_INTERNAL_SECRET = process.env.SOCKET_INTERNAL_SECRET;
@@ -41,18 +42,17 @@ function postToSocketServer(path: string, body: unknown) {
 /** Fire-and-forget push to already-open tabs, so they update live instead of on a manual refresh.
  * The triggering mutation (approval, payment, message...) must succeed even if realtime is down
  * or unconfigured, so this never throws. */
-export function emitRealtime(room: string, event: string, payload?: unknown) {
+export function emitRealtime(room: string | string[], event: string, payload?: unknown) {
   const emitter = getEmitter();
   if (emitter) {
     emitter.to(room).emit(event, payload);
     return;
   }
-  postToSocketServer("/internal/emit", { room, event, payload });
+  for (const target of Array.isArray(room) ? room : [room]) postToSocketServer("/internal/emit", { room: target, event, payload });
 }
 
-/** Drops every live socket of a user (ban, password change/reset). Their reconnect then fails:
- * the socket server re-checks the account and the session that would mint a new socket token is
- * gone. Fire-and-forget, like emitRealtime. */
+/** Drops every live socket of a user (ban, password change/reset, role change). Their reconnect
+ * then re-authenticates: the socket server re-checks the account. Fire-and-forget, like emitRealtime. */
 export function disconnectUserSockets(userId: string) {
   const emitter = getEmitter();
   if (emitter) {
@@ -61,3 +61,31 @@ export function disconnectUserSockets(userId: string) {
   }
   postToSocketServer("/internal/disconnect", { userId });
 }
+
+/** Takes all of a user's sockets out of a room - a course channel they lost access to. */
+export function removeUserFromRoom(userId: string, room: string) {
+  const emitter = getEmitter();
+  if (emitter) {
+    emitter.in(`user:${userId}`).socketsLeave(room);
+    return;
+  }
+  postToSocketServer("/internal/leave", { userId, room });
+}
+
+/** Tells every socket node to drop its cached permissions for a user ("*" for everyone). */
+export function invalidateUserAccess(userId: string) {
+  const emitter = getEmitter();
+  if (emitter) {
+    emitter.serverSideEmit("chat:invalidate", userId);
+    return;
+  }
+  postToSocketServer("/internal/invalidate", { userId });
+}
+
+/** The web app's RealtimeBus, for the shared chat module (src/server/chat). */
+export const realtimeBus: RealtimeBus = {
+  emit: emitRealtime,
+  disconnectUser: disconnectUserSockets,
+  removeUserFromRoom,
+  invalidateUser: invalidateUserAccess,
+};
