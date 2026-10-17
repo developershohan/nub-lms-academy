@@ -1,11 +1,13 @@
 import { z } from "zod";
+import { optionalNumber } from "@/lib/validations/common";
 
 export const quizSettingsSchema = z.object({
   title: z.string().min(3, "Title must be at least 3 characters"),
   description: z.string().optional(),
   passingScore: z.coerce.number().int().min(0).max(100),
-  maxAttempts: z.coerce.number().int().min(1).optional().or(z.literal("").transform(() => undefined)),
-  timeLimitSec: z.coerce.number().int().min(0).optional().or(z.literal("").transform(() => undefined)),
+  // Blank = unlimited / no time limit (see optionalNumber - "" must never coerce to 0).
+  maxAttempts: optionalNumber(z.coerce.number().int().min(1, "Max attempts must be at least 1")),
+  timeLimitSec: optionalNumber(z.coerce.number().int().min(1, "Time limit must be at least 1 second")),
 });
 
 export const questionTypes = ["SINGLE_CHOICE", "MULTIPLE_CHOICE", "TRUE_FALSE"] as const;
