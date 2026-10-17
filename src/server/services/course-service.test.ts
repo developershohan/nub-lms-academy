@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PrismaMock } from "../../../test/prisma-mock";
 
 vi.mock("@/lib/prisma", () => import("../../../test/prisma-mock").then((m) => m.prismaModule()));
-vi.mock("next/cache", () => ({ revalidatePath: vi.fn() }));
+vi.mock("next/cache", () => ({ revalidatePath: vi.fn(), revalidateTag: vi.fn() }));
 vi.mock("@/lib/permissions", () => ({
   canManageCourse: vi.fn().mockResolvedValue(true),
   canAdminAccess: vi.fn().mockResolvedValue(true),

@@ -1,5 +1,5 @@
 import "server-only";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, revalidateTag } from "next/cache";
 import { prisma } from "@/lib/prisma";
 import { canManageCourse, canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
@@ -42,6 +42,8 @@ function revalidateCoursePaths(courseId: string, slug?: string) {
     revalidatePath("/courses");
     revalidatePath("/");
     revalidatePath("/categories");
+    // The home page's shared lists (featured, trending, stats) - see home-cache.ts.
+    revalidateTag("home", "max");
   }
 }
 

@@ -7,6 +7,7 @@ import { enrollInFreeCourse } from "@/server/services/enrollment-service";
 import { toggleWishlist } from "@/server/services/wishlist-service";
 import { submitReview } from "@/server/services/review-service";
 import { createCheckoutSession } from "@/server/services/order-service";
+import { recordCourseView } from "@/server/services/home-service";
 
 export type ActionState = { error?: string };
 
@@ -57,4 +58,11 @@ export async function checkoutAction(_prevState: ActionState, formData: FormData
   if ("error" in result) return { error: result.error };
 
   redirect(result.freeViaCoupon ? "/student/my-courses" : result.checkoutUrl);
+}
+
+/** Signed-out visitors aren't tracked; nor is a course id that doesn't exist (the FK rejects it). */
+export async function recordCourseViewAction(courseId: string): Promise<void> {
+  const userId = await requireUserId();
+  if (!userId || typeof courseId !== "string") return;
+  await recordCourseView(userId, courseId).catch(() => undefined);
 }
