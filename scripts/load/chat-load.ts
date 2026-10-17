@@ -5,7 +5,10 @@
  * machine) and checks that no message was lost.
  *
  *   npm run build:services
- *   npx tsx scripts/load/chat-load.ts --users 500 --duration 60 --nodes 2 --restart
+ *   npx tsx scripts/load/chat-load.ts --users 500 --duration 60 --nodes 2 --restart [--failover]
+ *
+ * --failover sends a dropped client to another node, as a load balancer in front of several
+ * nodes would; without it, clients wait for their own node to come back.
  *
  * Needs DATABASE_URL (a THROWAWAY database - it creates ~N users and deletes them afterwards),
  * REDIS_URL and AUTH_SECRET. k6 and Artillery can't follow a Socket.IO fan-out (who received
@@ -33,6 +36,7 @@ const USERS = arg("users", 500);
 const DURATION_S = arg("duration", 60);
 const NODES = arg("nodes", 2);
 const RESTART = arg("restart", false);
+const FAILOVER = arg("failover", false);
 const BASE_PORT = arg("port", 4100);
 const SEND_MIN_MS = arg("min-interval", 3000);
 const SEND_MAX_MS = arg("max-interval", 6000);
@@ -165,7 +169,7 @@ class LoadClient {
   constructor(
     readonly index: number,
     readonly member: Member,
-    readonly node: number
+    public node: number
   ) {
     this.socket = io(`http://127.0.0.1:${BASE_PORT + node}`, {
       transports: ["websocket"],
@@ -175,8 +179,13 @@ class LoadClient {
       auth: (cb) => cb({ token: createSocketToken(member.userId, secret!) }),
     });
     this.socket.on("connect", () => this.onConnect());
-    this.socket.on("disconnect", () => {
+    this.socket.on("disconnect", (reason) => {
       this.disconnectedAt ??= Date.now();
+      if (FAILOVER && NODES > 1 && reason !== "io client disconnect") {
+        // The manager opens each reconnect attempt against its uri; point it at the next node.
+        this.node = (this.node + 1) % NODES;
+        (this.socket.io as unknown as { uri: string }).uri = `http://127.0.0.1:${BASE_PORT + this.node}`;
+      }
     });
     this.socket.on("message:new", (m: WireMessage) => this.receive([m], false));
   }
@@ -280,7 +289,9 @@ function percentile(sorted: number[], p: number) {
 }
 
 async function main() {
-  console.log(`Run ${RUN}: ${USERS} users, ${NODES} socket node(s), ${DURATION_S}s${RESTART ? ", killing node 0 mid-run" : ""}`);
+  console.log(
+    `Run ${RUN}: ${USERS} users, ${NODES} socket node(s), ${DURATION_S}s${RESTART ? ", killing node 0 mid-run" : ""}${FAILOVER ? ", clients fail over to another node" : ""}`
+  );
   const { members, conversationMembers } = await seed();
   console.log(`Seeded ${members.length} members in ${conversationMembers.size} conversations.`);
 
@@ -365,6 +376,7 @@ async function main() {
     nodes: NODES,
     durationS: DURATION_S,
     restart: restartReport,
+    failover: FAILOVER,
     messagesSent: sent,
     messagesAcked: acked,
     messagesStored: stored,
