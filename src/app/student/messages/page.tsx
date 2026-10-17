@@ -43,7 +43,7 @@ export default async function StudentMessagesPage() {
     ...classmates.map((c) => ({
       kind: "direct" as const,
       id: c.id,
-      label: c.name ?? c.email,
+      label: c.name ?? "Classmate",
       group: "Classmates",
     })),
   ];

@@ -104,10 +104,6 @@ io.engine.on(
   }
 );
 
-// Basic online/offline presence, tracked in memory (no Redis for this MVP - see README note on
-// scaling to multiple socket-server instances later).
-const connectionsByUser = new Map<string, number>();
-
 io.use((socket, next) => {
   authenticateSocket(socket, next).catch((err) => {
     console.error(
@@ -125,22 +121,14 @@ io.on("connection", (socket) => {
   socket.join(`user:${userId}`);
   if (roleNames.includes("ADMIN") || roleNames.includes("SUPER_ADMIN")) socket.join("admins");
 
-  const previousCount = connectionsByUser.get(userId) ?? 0;
-  connectionsByUser.set(userId, previousCount + 1);
-  if (previousCount === 0) io.emit("user:online", { userId });
-
+  // Online/offline presence is NOT broadcast here: io.emit told every connected socket on the
+  // platform when any user came or went. It's scoped to shared conversation rooms instead - see
+  // conversation:join / conversation:leave / disconnecting in events/chat.events.ts.
   registerChatEvents(io, socket);
 
   socket.on("disconnect", (reason) => {
     console.log(`Socket disconnected: user ${userId}, socket ${socket.id}, reason: ${reason}`);
     clearRateLimit(socket.id);
-    const count = (connectionsByUser.get(userId) ?? 1) - 1;
-    if (count <= 0) {
-      connectionsByUser.delete(userId);
-      io.emit("user:offline", { userId });
-    } else {
-      connectionsByUser.set(userId, count);
-    }
   });
 });
 

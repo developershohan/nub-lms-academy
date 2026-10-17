@@ -236,16 +236,28 @@ export async function listSupportConversationSummariesForAdmin(): Promise<Conver
   });
 }
 
-export async function listMessages(userId: string, conversationId: string, limit = 50) {
+/**
+ * One page of a conversation, oldest-first for display. Fetched newest-first and reversed: the
+ * old ascending order + take returned the OLDEST 50 messages, so once a conversation passed 50
+ * nothing recent ever showed. `before` is the id of the oldest message the client already has,
+ * for "load earlier messages"; `hasMore` says whether anything older remains.
+ */
+export async function listMessages(
+  userId: string,
+  conversationId: string,
+  { before, limit = 50 }: { before?: string; limit?: number } = {}
+) {
   if (!(await canAccessConversation(userId, conversationId))) return { error: "Forbidden" } as const;
 
-  const messages = await prisma.message.findMany({
+  const newestFirst = await prisma.message.findMany({
     where: { conversationId },
     include: { sender: { select: { id: true, name: true } } },
-    orderBy: { createdAt: "asc" },
-    take: limit,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+    ...(before ? { cursor: { id: before }, skip: 1 } : {}),
   });
-  return { ok: true, messages } as const;
+  const hasMore = newestFirst.length > limit;
+  return { ok: true, messages: newestFirst.slice(0, limit).reverse(), hasMore } as const;
 }
 
 export async function sendMessage(senderId: string, conversationId: string, content: string) {
@@ -313,9 +325,11 @@ export async function markConversationRead(userId: string, conversationId: strin
 export async function getConversationParticipants(userId: string, conversationId: string) {
   if (!(await canAccessConversation(userId, conversationId))) return { error: "Forbidden" } as const;
 
+  // No email: in a course group every enrolled student can call this, and classmates' addresses
+  // aren't theirs to see.
   const participants = await prisma.conversationParticipant.findMany({
     where: { conversationId },
-    include: { user: { select: { id: true, name: true, email: true } } },
+    include: { user: { select: { id: true, name: true } } },
   });
   return { ok: true, participants } as const;
 }
