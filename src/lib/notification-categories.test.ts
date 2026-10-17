@@ -8,10 +8,10 @@ describe("notification categories", () => {
     expect(categoryOf("something-new")).toBe("account");
   });
 
-  it("keeps locked in-app on and email off where there is no email", () => {
-    expect(effectivePreference("account", { inApp: false, email: false })).toEqual({ inApp: true, email: false });
-    expect(effectivePreference("messages", { inApp: false, email: true })).toEqual({ inApp: false, email: false });
-    expect(effectivePreference("payments", undefined)).toEqual({ inApp: true, email: true });
+  it("keeps locked in-app on, and takes the category's push default when nothing was saved for it", () => {
+    expect(effectivePreference("account", { inApp: false, email: false })).toEqual({ inApp: true, email: false, push: true });
+    expect(effectivePreference("messages", { inApp: false, email: true, push: false })).toEqual({ inApp: false, email: true, push: false });
+    expect(effectivePreference("payments", undefined)).toEqual({ inApp: true, email: true, push: true });
   });
 
   it("only offers teaching and admin categories to people they apply to", () => {

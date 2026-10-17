@@ -1,14 +1,16 @@
 /*
  * notify(): the one way a notification is created. It honours each recipient's preferences,
- * collapses repeats (one "3 new messages" instead of three rows), writes the rows, and pushes the
- * full notification to the user's open tabs - no "something changed, refetch" round trip.
+ * collapses repeats (one "3 new messages" instead of three rows), writes the rows, pushes the
+ * full notification to the user's open tabs - no "something changed, refetch" round trip - and
+ * then sends or queues email and web push.
  *
- * No next/* or "server-only" imports: the socket server uses it too. Each process builds its own
- * notifier with createNotifier(), passing how it pushes to a user (the socket server emits on its
- * io; Next.js publishes through the Redis emitter) and, optionally, how it sends email.
+ * No next/* or "server-only" imports: the socket server and the worker use it too. Each process
+ * builds its own notifier with createNotifier(), passing how it pushes to a user (the socket
+ * server emits on its io; Next.js publishes through the Redis emitter), how it sends email, and -
+ * when Redis is configured - the job queue that hands email and push to the worker.
  */
 import { prisma } from "@/lib/prisma";
-import { categoryOf, effectivePreference, type NotificationType } from "@/lib/notification-categories";
+import { categoryOf, effectivePreference, NOTIFICATION_CATEGORIES, type NotificationType } from "@/lib/notification-categories";
 import type { Prisma } from "@/generated/prisma/client";
 
 export type NotifyInput = {
@@ -54,19 +56,45 @@ export function serializeNotification(row: NotificationRow): PushedNotification 
   };
 }
 
+/** What the worker needs to send one email or one push: the notification, not the user's address. */
+export type DeliveryJob = {
+  userId: string;
+  notificationId: string | null;
+  type: string;
+  title: string;
+  body: string | null;
+  link: string | null;
+};
+
 type Push = (userId: string, event: string, payload: unknown) => void;
 type SendEmail = (to: { email: string; name: string | null }, notification: PushedNotification) => Promise<unknown>;
+type SendPush = (job: DeliveryJob) => Promise<unknown>;
+/** Hands a delivery to the worker; returns false when no queue is available (no Redis). */
+type Enqueue = (kind: "email" | "push", job: DeliveryJob) => Promise<boolean>;
 
 export function countUnread(userId: string) {
   return prisma.notification.count({ where: { userId, status: "UNREAD" } });
 }
 
-export function createNotifier({ push, sendEmail }: { push: Push; sendEmail?: SendEmail }) {
-  return async function notify(userIds: string[], input: NotifyInput) {
+export type Notifier = (userIds: string[], input: NotifyInput) => Promise<NotificationRow[]>;
+
+export function createNotifier({
+  push,
+  sendEmail,
+  sendPush,
+  enqueue,
+}: {
+  push: Push;
+  sendEmail?: SendEmail;
+  sendPush?: SendPush;
+  enqueue?: Enqueue;
+}): Notifier {
+  return async function notify(userIds, input) {
     const recipients = [...new Set(userIds)].filter((id) => id && id !== input.actorId);
     if (recipients.length === 0) return [];
 
     const category = categoryOf(input.type);
+    const timing = NOTIFICATION_CATEGORIES[category];
     const saved = await prisma.notificationPreference.findMany({ where: { userId: { in: recipients }, category } });
     const prefs = new Map(saved.map((p) => [p.userId, effectivePreference(category, p)]));
     const pref = (userId: string) => prefs.get(userId) ?? effectivePreference(category, undefined);
@@ -89,16 +117,47 @@ export function createNotifier({ push, sendEmail }: { push: Push; sendEmail?: Se
       });
     }
 
-    const emailTo = recipients.filter((id) => pref(id).email);
-    if (sendEmail && emailTo.length) {
-      const users = await prisma.user.findMany({
-        where: { id: { in: emailTo }, status: "ACTIVE" },
-        select: { id: true, email: true, name: true },
-      });
-      const byUser = new Map(rows.map((r) => [r.userId, serializeNotification(r)]));
-      // Email is best effort: a failed send must never fail whatever caused the notification.
-      await Promise.allSettled(users.map(async (u) => sendEmail(u, byUser.get(u.id) ?? emailOnly(u.id, input))));
+    // Chat waits for the worker (push after ~1 minute, an email digest after ~30 minutes, only if
+    // still unread); everything else goes out now - through the worker when there is one.
+    const byUser = new Map(rows.map((r) => [r.userId, r]));
+    const job = (userId: string): DeliveryJob => ({
+      userId,
+      notificationId: byUser.get(userId)?.id ?? null,
+      type: input.type,
+      title: input.title,
+      body: input.body ?? null,
+      link: input.link ?? null,
+    });
+    const deliveries: Promise<unknown>[] = [];
+    if (timing.emailTiming === "immediate") {
+      const emailTo = recipients.filter((id) => pref(id).email);
+      if (emailTo.length) {
+        const users = await prisma.user.findMany({
+          where: { id: { in: emailTo }, status: "ACTIVE" },
+          select: { id: true, email: true, name: true },
+        });
+        for (const user of users) {
+          deliveries.push(
+            (async () => {
+              if (enqueue && (await enqueue("email", job(user.id)))) return;
+              if (sendEmail) await sendEmail(user, byUser.has(user.id) ? serializeNotification(byUser.get(user.id)!) : emailOnly(user.id, input));
+            })()
+          );
+        }
+      }
     }
+    if (timing.pushTiming === "immediate") {
+      for (const userId of recipients.filter((id) => pref(id).push)) {
+        deliveries.push(
+          (async () => {
+            if (enqueue && (await enqueue("push", job(userId)))) return;
+            if (sendPush) await sendPush(job(userId));
+          })()
+        );
+      }
+    }
+    // Email and push are best effort: a failed send must never fail whatever caused the notification.
+    await Promise.allSettled(deliveries);
     return rows;
   };
 }
@@ -118,7 +177,11 @@ function emailOnly(userId: string, input: NotifyInput): PushedNotification {
   };
 }
 
-/** Collapses into the unread notification with the same group key, or writes a new one. */
+/**
+ * Collapses into the unread notification with the same group key, or writes a new one. A
+ * collapsed row keeps `since` (when its unread streak began) - the worker's chat push and digest
+ * are timed from it - and bumps `count`.
+ */
 async function writeOne(userId: string, input: NotifyInput): Promise<NotificationRow> {
   const fields = {
     type: input.type,
@@ -130,21 +193,28 @@ async function writeOne(userId: string, input: NotifyInput): Promise<Notificatio
     entityId: input.entity?.id ?? null,
     groupKey: input.groupKey ?? null,
   };
+  const now = new Date();
   if (input.groupKey) {
     const open = await prisma.notification.findFirst({
       where: { userId, groupKey: input.groupKey, status: "UNREAD" },
       orderBy: { createdAt: "desc" },
     });
     if (open) {
-      const count = Number((open.data as { count?: number } | null)?.count ?? 1) + 1;
+      const previous = (open.data as { count?: number; since?: number } | null) ?? {};
+      const count = Number(previous.count ?? 1) + 1;
       return prisma.notification.update({
         where: { id: open.id },
-        data: { ...fields, data: { ...input.data, count }, createdAt: new Date() },
+        data: { ...fields, data: { ...input.data, count, since: previous.since ?? open.createdAt.getTime() }, createdAt: now },
       });
     }
   }
   return prisma.notification.create({
-    data: { userId, ...fields, data: input.groupKey ? { ...input.data, count: 1 } : (input.data as Prisma.InputJsonValue) },
+    data: {
+      userId,
+      ...fields,
+      createdAt: now,
+      data: input.groupKey ? { ...input.data, count: 1, since: now.getTime() } : (input.data as Prisma.InputJsonValue),
+    },
   });
 }
 

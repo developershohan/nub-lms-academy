@@ -4,6 +4,7 @@ import { emitRealtime } from "@/lib/realtime";
 import { sendNotificationEmail } from "@/lib/email";
 import {
   NOTIFICATION_CATEGORIES,
+  NOTIFICATION_TYPES,
   effectivePreference,
   type NotificationCategory,
 } from "@/lib/notification-categories";
@@ -11,13 +12,19 @@ import {
   countUnread,
   createNotifier,
   serializeNotification,
+  type DeliveryJob,
   type NotifyInput,
 } from "@/server/notifications/notify";
+import { sendPushToUser } from "@/server/notifications/push";
+import { enqueueDelivery } from "@/server/realtime/queues";
 
-/** notify() for the Next.js app: pushes through the realtime emitter, emails via Resend. */
+/** notify() for the Next.js app: pushes through the realtime emitter; email and web push go to
+ * the worker when Redis is configured, and straight out from here otherwise. */
 export const notify = createNotifier({
   push: (userId, event, payload) => emitRealtime(`user:${userId}`, event, payload),
   sendEmail: (to, notification) => sendNotificationEmail(to.email, notification),
+  sendPush: (job: DeliveryJob) => sendPushToUser(job.userId, { title: job.title, body: job.body, url: job.link, tag: job.type }),
+  enqueue: enqueueDelivery,
 });
 
 async function activeUserIdsWithRoles(roles: ("ADMIN" | "SUPER_ADMIN" | "SUPPORT")[]) {
@@ -40,13 +47,23 @@ export async function notifyStaff(input: NotifyInput) {
 
 export const countUnreadNotifications = countUnread;
 
+export type NotificationTab = "all" | "unread" | NotificationCategory;
+
+/** The types a category tab lists. */
+function typesIn(category: NotificationCategory) {
+  return Object.entries(NOTIFICATION_TYPES)
+    .filter(([, c]) => c === category)
+    .map(([type]) => type);
+}
+
 /** Newest first. `before` is the id of the oldest one the client has, for "load more". */
 export async function listNotificationsForUser(
   userId: string,
-  { limit = 20, before, unreadOnly = false }: { limit?: number; before?: string; unreadOnly?: boolean } = {}
+  { limit = 20, before, unreadOnly = false, tab }: { limit?: number; before?: string; unreadOnly?: boolean; tab?: NotificationTab } = {}
 ) {
+  const filter = tab === "unread" ? { status: "UNREAD" as const } : tab && tab !== "all" ? { type: { in: typesIn(tab) } } : {};
   const rows = await prisma.notification.findMany({
-    where: { userId, ...(unreadOnly ? { status: "UNREAD" } : {}) },
+    where: { userId, ...(unreadOnly ? { status: "UNREAD" } : {}), ...filter },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
     ...(before ? { cursor: { id: before }, skip: 1 } : {}),
@@ -100,12 +117,12 @@ export async function getNotificationPreferences(userId: string) {
 /** Saves the user's choices; locked channels and email for categories without it stay as they must. */
 export async function updateNotificationPreferences(
   userId: string,
-  choices: { category: NotificationCategory; inApp: boolean; email: boolean }[]
+  choices: { category: NotificationCategory; inApp: boolean; email: boolean; push?: boolean }[]
 ) {
   await prisma.$transaction(
-    choices.map(({ category, inApp, email }) => {
+    choices.map(({ category, inApp, email, push }) => {
       const info = NOTIFICATION_CATEGORIES[category];
-      const data = { inApp: info.inAppLocked || inApp, email: info.emailAvailable && email };
+      const data = { inApp: info.inAppLocked || inApp, email: info.emailAvailable && email, push: push ?? info.defaults.push };
       return prisma.notificationPreference.upsert({
         where: { userId_category: { userId, category } },
         create: { userId, category, ...data },
@@ -114,4 +131,33 @@ export async function updateNotificationPreferences(
     })
   );
   return { ok: true } as const;
+}
+
+export async function savePushSubscription(
+  userId: string,
+  subscription: { endpoint: string; keys: { p256dh: string; auth: string } },
+  userAgent: string | null
+) {
+  await prisma.pushSubscription.upsert({
+    where: { endpoint: subscription.endpoint },
+    create: {
+      userId,
+      endpoint: subscription.endpoint,
+      p256dh: subscription.keys.p256dh,
+      auth: subscription.keys.auth,
+      userAgent: userAgent?.slice(0, 300) ?? null,
+    },
+    // The same browser signing in as someone else takes the subscription with it.
+    update: { userId, p256dh: subscription.keys.p256dh, auth: subscription.keys.auth },
+  });
+  return { ok: true } as const;
+}
+
+export async function deletePushSubscription(userId: string, endpoint: string) {
+  await prisma.pushSubscription.deleteMany({ where: { userId, endpoint } });
+  return { ok: true } as const;
+}
+
+export function countPushSubscriptions(userId: string) {
+  return prisma.pushSubscription.count({ where: { userId } });
 }

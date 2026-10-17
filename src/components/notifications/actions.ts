@@ -44,6 +44,7 @@ export async function updateNotificationPreferencesAction(
       category,
       inApp: formData.get(`inApp:${category}`) === "on",
       email: formData.get(`email:${category}`) === "on",
+      push: formData.get(`push:${category}`) === "on",
     }))
   );
   revalidatePath("/notifications/preferences");

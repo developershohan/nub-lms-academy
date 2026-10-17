@@ -8,27 +8,29 @@ import { markAllNotificationsReadAction, markNotificationReadAction } from "@/co
 import { collapsedCount, useLiveNotifications } from "@/components/notifications/use-live-notifications";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { categoryOf } from "@/lib/notification-categories";
 import { formatRelativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import type { PushedNotification } from "@/server/notifications/notify";
 
-/** The full notification history, live: new ones appear at the top as they arrive. */
+/** The full notification history, live: new ones appear at the top as they arrive. `tab` is
+ * "all", "unread" or a category; live arrivals are shown only when they belong on it. */
 export function NotificationList({
+  tab,
   initialNotifications,
   initialHasMore,
   initialUnreadCount,
-  unreadOnly,
 }: {
+  tab: string;
   initialNotifications: PushedNotification[];
   initialHasMore: boolean;
   initialUnreadCount: number;
-  unreadOnly: boolean;
 }) {
-  const { notifications, setNotifications, unreadCount, setUnreadCount } = useLiveNotifications(
-    initialNotifications,
-    initialUnreadCount,
-    { unreadOnly }
-  );
+  const unreadOnly = tab === "unread";
+  const { notifications, setNotifications, unreadCount, setUnreadCount } = useLiveNotifications(initialNotifications, initialUnreadCount, {
+    unreadOnly,
+    accept: (n) => tab === "all" || unreadOnly || categoryOf(n.type) === tab,
+  });
   const [hasMore, setHasMore] = useState(initialHasMore);
   const [loading, setLoading] = useState(false);
 
@@ -37,10 +39,10 @@ export function NotificationList({
     if (!oldest) return;
     setLoading(true);
     try {
-      const res = await fetch(`/api/v1/notifications?before=${encodeURIComponent(oldest.id)}${unreadOnly ? "&unread=1" : ""}`);
+      const res = await fetch(`/api/v1/notifications?before=${encodeURIComponent(oldest.id)}&tab=${encodeURIComponent(tab)}`);
       const data = await res.json();
       if (!res.ok) return toast.error(data.error ?? "Could not load more notifications");
-      setNotifications((current) => [...current, ...data.notifications]);
+      setNotifications((current) => [...current, ...data.notifications.filter((n: PushedNotification) => !current.some((c) => c.id === n.id))]);
       setHasMore(!!data.hasMore);
     } finally {
       setLoading(false);
@@ -64,7 +66,7 @@ export function NotificationList({
     return (
       <EmptyState
         icon={BellOff}
-        title={unreadOnly ? "You're all caught up" : "No notifications yet"}
+        title={unreadOnly ? "You're all caught up" : "Nothing here yet"}
         description="Messages, course updates and payments will show up here as they happen."
       />
     );
@@ -84,10 +86,7 @@ export function NotificationList({
           const count = collapsedCount(n);
           const content = (
             <div className="flex gap-3 p-4">
-              <span
-                className={cn("mt-1.5 size-2 shrink-0 rounded-full", n.status === "UNREAD" ? "bg-primary" : "bg-transparent")}
-                aria-hidden
-              />
+              <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", n.status === "UNREAD" ? "bg-primary" : "bg-transparent")} aria-hidden />
               <div className="min-w-0 flex-1 space-y-0.5">
                 <p className={cn("text-sm", n.status === "UNREAD" && "font-semibold")}>
                   {n.status === "UNREAD" && <span className="sr-only">Unread: </span>}
@@ -104,11 +103,7 @@ export function NotificationList({
           return (
             <li key={n.id}>
               {n.link ? (
-                <Link
-                  href={n.link}
-                  onClick={() => open(n)}
-                  className="block outline-none transition-colors hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50"
-                >
+                <Link href={n.link} onClick={() => open(n)} className="block outline-none transition-colors hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50">
                   {content}
                 </Link>
               ) : (

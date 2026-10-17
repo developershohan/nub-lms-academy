@@ -18,7 +18,12 @@ type ReadPayload = { ids?: string[]; all?: boolean; groupKey?: string; unreadCou
 export function useLiveNotifications(
   initial: PushedNotification[],
   initialUnreadCount: number,
-  { limit, toastNew = false, unreadOnly = false }: { limit?: number; toastNew?: boolean; unreadOnly?: boolean } = {}
+  {
+    limit,
+    toastNew = false,
+    unreadOnly = false,
+    accept,
+  }: { limit?: number; toastNew?: boolean; unreadOnly?: boolean; accept?: (notification: PushedNotification) => boolean } = {}
 ) {
   const { socket } = useSocket();
   const router = useRouter();
@@ -28,6 +33,11 @@ export function useLiveNotifications(
   useEffect(() => {
     if (!socket) return;
     const onNew = ({ notification, unreadCount, refreshPage }: NewPayload) => {
+      // A category tab only lists its own kind; the count is for everything.
+      if (accept && !accept(notification)) {
+        setUnreadCount(unreadCount);
+        return;
+      }
       setNotifications((current) => {
         const next = [notification, ...current.filter((n) => n.id !== notification.id)];
         return limit ? next.slice(0, limit) : next;
@@ -56,7 +66,7 @@ export function useLiveNotifications(
       socket.off("notification:new", onNew);
       socket.off("notification:read", onRead);
     };
-  }, [socket, router, limit, toastNew, unreadOnly]);
+  }, [socket, router, limit, toastNew, unreadOnly, accept]);
 
   return { notifications, setNotifications, unreadCount, setUnreadCount };
 }
