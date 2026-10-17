@@ -131,15 +131,20 @@ export function registerChatEvents(io: Server, socket: Socket) {
     })
   );
 
+  // Typing indicators are relayed only into rooms this socket actually joined (conversation:join
+  // checked access) - otherwise anyone could push their name into any conversation by id.
+  const joinedRoom = (conversationId: unknown) =>
+    typeof conversationId === "string" && socket.rooms.has(conversationRoom(conversationId))
+      ? conversationRoom(conversationId)
+      : null;
+
   socket.on("typing:start", (conversationId: unknown) => {
-    if (typeof conversationId === "string") {
-      socket.to(conversationRoom(conversationId)).emit("typing:start", { conversationId, userId, name });
-    }
+    const room = joinedRoom(conversationId);
+    if (room) socket.to(room).emit("typing:start", { conversationId, userId, name });
   });
 
   socket.on("typing:stop", (conversationId: unknown) => {
-    if (typeof conversationId === "string") {
-      socket.to(conversationRoom(conversationId)).emit("typing:stop", { conversationId, userId });
-    }
+    const room = joinedRoom(conversationId);
+    if (room) socket.to(room).emit("typing:stop", { conversationId, userId });
   });
 }

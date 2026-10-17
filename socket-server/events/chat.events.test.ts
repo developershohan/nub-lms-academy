@@ -77,6 +77,22 @@ describe("chat socket events", () => {
     expect(emitted).toContainEqual({ target: "self", event: "user:online", payload: { userId: "teacher-1" } });
   });
 
+  it("relays typing only into conversations the socket has joined", async () => {
+    const { handlers, emitted, rooms } = setup();
+    rooms.add("conversation:mine");
+
+    await handlers.get("typing:start")!("someone-elses");
+    await handlers.get("typing:start")!("mine");
+
+    expect(emitted).toEqual([
+      {
+        target: "others:conversation:mine",
+        event: "typing:start",
+        payload: { conversationId: "mine", userId: "student-1", name: "Amina" },
+      },
+    ]);
+  });
+
   it("announces offline to the room on disconnect only when no other tab of the user remains", async () => {
     const { handlers, emitted, rooms } = setup();
     rooms.add("conversation:c1");
