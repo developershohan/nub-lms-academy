@@ -1,13 +1,21 @@
 import { z } from "zod";
 
+/** Accounts are stored under a lowercase email so "Rahim@Gmail.com" and "rahim@gmail.com" can't
+ * become two different accounts - every lookup by a user-typed email should normalise the same way. */
+export function normalizeEmail(email: string) {
+  return email.trim().toLowerCase();
+}
+
+const normalizedEmail = z.string().trim().toLowerCase().email("Enter a valid email");
+
 export const registerSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
-  email: z.string().email("Enter a valid email"),
+  email: normalizedEmail,
   password: z.string().min(8, "Password must be at least 8 characters"),
 });
 
 export const loginSchema = z.object({
-  email: z.string().email("Enter a valid email"),
+  email: normalizedEmail,
   password: z.string().min(1, "Password is required"),
 });
 

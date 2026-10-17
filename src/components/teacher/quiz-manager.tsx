@@ -212,7 +212,7 @@ function QuizSettingsForm({ quiz }: { quiz: Quiz }) {
       </div>
       <div className="space-y-1.5">
         <Label>Time limit in seconds (blank = none)</Label>
-        <Input name="timeLimitSec" type="number" min={0} defaultValue={quiz.timeLimitSec ?? ""} />
+        <Input name="timeLimitSec" type="number" min={1} defaultValue={quiz.timeLimitSec || ""} />
       </div>
       <div className="flex items-end sm:col-span-2">
         {state.error && <p className="mr-auto text-sm text-destructive">{state.error}</p>}

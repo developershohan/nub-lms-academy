@@ -68,7 +68,8 @@ export function listTeachersForStudent(userId: string) {
 }
 
 /** Other students sharing at least one active enrollment with the given user - the "classmates"
- * contact list for student-to-student chat. */
+ * contact list for student-to-student chat. Deliberately no email: a classmate's address isn't
+ * something another student should be handed. */
 export async function listClassmates(userId: string) {
   const courseIds = await prisma.enrollment.findMany({
     where: { userId, status: "ACTIVE" },
@@ -81,7 +82,7 @@ export async function listClassmates(userId: string) {
       id: { not: userId },
       enrollments: { some: { status: "ACTIVE", courseId: { in: courseIds.map((c) => c.courseId) } } },
     },
-    select: { id: true, name: true, email: true },
+    select: { id: true, name: true },
     orderBy: { name: "asc" },
     distinct: ["id"],
   });

@@ -14,8 +14,12 @@ export async function getActiveUserWithRoles(userId: string) {
   return { id: user.id, name: user.name, roleNames: user.roles.map((r) => r.role.name) as RoleName[] };
 }
 
+// Mirrors ROLE_PERMISSIONS' "chat:moderate" in src/lib/permissions.ts - SUPPORT staff answer
+// SUPPORT tickets over the socket, so they need the same blanket access admins have.
+const CHAT_MODERATOR_ROLES: RoleName[] = ["ADMIN", "SUPER_ADMIN", "SUPPORT"];
+
 export async function canAccessConversation(roleNames: RoleName[], userId: string, conversationId: string) {
-  if (roleNames.includes("ADMIN") || roleNames.includes("SUPER_ADMIN")) return true;
+  if (roleNames.some((role) => CHAT_MODERATOR_ROLES.includes(role))) return true;
 
   const conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
   if (!conversation) return false;
@@ -28,12 +32,14 @@ export async function canAccessConversation(roleNames: RoleName[], userId: strin
     });
     if (!course) return false;
     if (course.teacherId === userId) return true;
-    if (course.status !== "PUBLISHED") return false;
 
+    // Enrollment before status, as in canAccessCourse: enrolled students keep course chat after
+    // an unpublish/archive; only subscription access requires the course to still be published.
     const enrollment = await prisma.enrollment.findUnique({
       where: { userId_courseId: { userId, courseId: conversation.courseId } },
     });
     if (enrollment?.status === "ACTIVE") return true;
+    if (course.status !== "PUBLISHED") return false;
 
     if (course.isSubscriptionIncluded) {
       const subscription = await prisma.subscription.findFirst({ where: { userId, status: "ACTIVE" } });

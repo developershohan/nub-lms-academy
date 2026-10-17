@@ -10,12 +10,14 @@ const sendSchema = z.object({ content: z.string().trim().min(1).max(2000) });
 // change silently leak one conversation's messages into another user's request.
 export const dynamic = "force-dynamic";
 
-export async function GET(_request: Request, { params }: { params: Promise<{ conversationId: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ conversationId: string }> }) {
   const session = await auth();
   if (!session?.user?.id) return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
 
   const { conversationId } = await params;
-  const result = await listMessages(session.user.id, conversationId);
+  // ?before=<message id> pages back through older messages (see listMessages).
+  const before = new URL(request.url).searchParams.get("before")?.slice(0, 64) || undefined;
+  const result = await listMessages(session.user.id, conversationId, { before });
   if ("error" in result) return NextResponse.json({ error: result.error }, { status: 403 });
   return NextResponse.json(result);
 }

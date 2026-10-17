@@ -181,6 +181,15 @@ export function listSupportConversationsForAdmin() {
   });
 }
 
+const REMOVED_MESSAGE = "Message removed";
+
+/** A removed message (sender's own delete or moderation) keeps its row, but its text must not reach
+ * anyone except chat moderators - the UI showing "Message removed" isn't enough when the original
+ * content is still in the JSON the browser receives. */
+function hideRemovedContent<T extends { content: string; deletedAt: Date | null }>(message: T): T {
+  return message.deletedAt ? { ...message, content: "" } : message;
+}
+
 export type ConversationSummary = {
   id: string;
   type: "DIRECT" | "COURSE_GROUP" | "SUPPORT";
@@ -201,7 +210,9 @@ function summarizeForUser(
       : conversation.type === "SUPPORT"
         ? "Support"
         : (other?.user.name ?? other?.user.email ?? "Direct message");
-  const last = conversation.messages[0] as { content: string; createdAt: Date; senderId: string } | undefined;
+  const last = conversation.messages[0] as
+    | { content: string; createdAt: Date; senderId: string; deletedAt: Date | null }
+    | undefined;
   const mine = conversation.participants.find((p) => p.userId === currentUserId);
   const unread = !!last && last.senderId !== currentUserId && (!mine?.lastReadAt || mine.lastReadAt < last.createdAt);
 
@@ -209,7 +220,7 @@ function summarizeForUser(
     id: conversation.id,
     type: conversation.type,
     label,
-    lastMessage: last?.content ?? null,
+    lastMessage: last ? (last.deletedAt ? REMOVED_MESSAGE : last.content) : null,
     lastMessageAt: last ? last.createdAt.toISOString() : null,
     unread,
   };
@@ -236,16 +247,30 @@ export async function listSupportConversationSummariesForAdmin(): Promise<Conver
   });
 }
 
-export async function listMessages(userId: string, conversationId: string, limit = 50) {
+/**
+ * One page of a conversation, oldest-first for display. Fetched newest-first and reversed: the
+ * old ascending order + take returned the OLDEST 50 messages, so once a conversation passed 50
+ * nothing recent ever showed. `before` is the id of the oldest message the client already has,
+ * for "load earlier messages"; `hasMore` says whether anything older remains.
+ */
+export async function listMessages(
+  userId: string,
+  conversationId: string,
+  { before, limit = 50 }: { before?: string; limit?: number } = {}
+) {
   if (!(await canAccessConversation(userId, conversationId))) return { error: "Forbidden" } as const;
 
-  const messages = await prisma.message.findMany({
+  const newestFirst = await prisma.message.findMany({
     where: { conversationId },
     include: { sender: { select: { id: true, name: true } } },
-    orderBy: { createdAt: "asc" },
-    take: limit,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: limit + 1,
+    ...(before ? { cursor: { id: before }, skip: 1 } : {}),
   });
-  return { ok: true, messages } as const;
+  const hasMore = newestFirst.length > limit;
+  const page = newestFirst.slice(0, limit).reverse();
+  const messages = (await canModerateChat(userId)) ? page : page.map(hideRemovedContent);
+  return { ok: true, messages, hasMore } as const;
 }
 
 export async function sendMessage(senderId: string, conversationId: string, content: string) {
@@ -313,9 +338,11 @@ export async function markConversationRead(userId: string, conversationId: strin
 export async function getConversationParticipants(userId: string, conversationId: string) {
   if (!(await canAccessConversation(userId, conversationId))) return { error: "Forbidden" } as const;
 
+  // No email: in a course group every enrolled student can call this, and classmates' addresses
+  // aren't theirs to see.
   const participants = await prisma.conversationParticipant.findMany({
     where: { conversationId },
-    include: { user: { select: { id: true, name: true, email: true } } },
+    include: { user: { select: { id: true, name: true } } },
   });
   return { ok: true, participants } as const;
 }

@@ -1,20 +1,28 @@
 import { z } from "zod";
+import { optionalNumber } from "@/lib/validations/common";
 
 export const courseLevels = ["BEGINNER", "INTERMEDIATE", "ADVANCED", "ALL_LEVELS"] as const;
 
-export const courseDetailsSchema = z.object({
-  title: z.string().min(3, "Title must be at least 3 characters"),
-  subtitle: z.string().optional(),
-  description: z.string().optional(),
-  categoryId: z.string().optional(),
-  level: z.enum(courseLevels),
-  language: z.string().min(1, "Language is required"),
-  price: z.coerce.number().min(0, "Price cannot be negative"),
-  salePrice: z.coerce.number().min(0).optional().or(z.literal("").transform(() => undefined)),
-  targetAudience: z.string().optional(),
-  requirements: z.string().optional(),
-  outcomes: z.string().optional(),
-});
+export const courseDetailsSchema = z
+  .object({
+    title: z.string().min(3, "Title must be at least 3 characters"),
+    subtitle: z.string().optional(),
+    description: z.string().optional(),
+    categoryId: z.string().optional(),
+    level: z.enum(courseLevels),
+    language: z.string().min(1, "Language is required"),
+    price: z.coerce.number().min(0, "Price cannot be negative"),
+    // Blank = no sale. A sale price is what checkout charges (salePrice ?? price), so it must be
+    // strictly below the regular price - an explicit 0 still means "free while on sale".
+    salePrice: optionalNumber(z.coerce.number().min(0, "Sale price cannot be negative")),
+    targetAudience: z.string().optional(),
+    requirements: z.string().optional(),
+    outcomes: z.string().optional(),
+  })
+  .refine((data) => data.salePrice === undefined || data.salePrice < data.price, {
+    message: "Sale price must be lower than the regular price",
+    path: ["salePrice"],
+  });
 
 export const sectionSchema = z.object({
   title: z.string().min(2, "Section title must be at least 2 characters"),

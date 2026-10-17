@@ -59,12 +59,15 @@ export function ChatShell({
   const [selectedId, setSelectedId] = useState<string | null>(initialConversations[0]?.id ?? null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loadingMessages, setLoadingMessages] = useState(false);
+  const [hasEarlier, setHasEarlier] = useState(false);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
   const [typingLabel, setTypingLabel] = useState<string | null>(null);
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const [seenByOther, setSeenByOther] = useState(false);
   const [draft, setDraft] = useState("");
   const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const prependedEarlier = useRef(false);
 
   useEffect(() => {
     if (!socket) return;
@@ -88,20 +91,44 @@ export function ChatShell({
 
   useEffect(() => {
     if (!socket || !selectedId) return;
+    let cancelled = false;
 
-    socket.emit("conversation:join", selectedId);
-    socket.emit("message:read", selectedId);
+    const join = () => {
+      socket.emit("conversation:join", selectedId);
+      socket.emit("message:read", selectedId);
+    };
+    const loadLatest = () =>
+      fetch(`/api/v1/chat/conversations/${selectedId}/messages`)
+        .then((res) => res.json())
+        .then((data) => {
+          // A slow response for a conversation the user already left must not overwrite this one.
+          if (cancelled) return;
+          setMessages(data.messages ?? []);
+          setHasEarlier(!!data.hasMore);
+        })
+        .finally(() => {
+          if (!cancelled) setLoadingMessages(false);
+        });
+
+    // While disconnected, socket.io would buffer the join and onConnect below sends it anyway.
+    if (socket.connected) join();
     // Deferred one tick: setState must not be called synchronously from inside an effect body.
     queueMicrotask(() => {
       setSeenByOther(false);
       setTypingLabel(null);
       setLoadingMessages(true);
+      // Presence is per conversation room - the join above re-announces whoever is here.
+      setOnlineUsers(new Set());
     });
+    loadLatest();
 
-    fetch(`/api/v1/chat/conversations/${selectedId}/messages`)
-      .then((res) => res.json())
-      .then((data) => setMessages(data.messages ?? []))
-      .finally(() => setLoadingMessages(false));
+    // A reconnect (network blip, server restart, laptop waking up) is a brand-new server-side
+    // socket that isn't in any conversation room - without re-joining, the open conversation
+    // silently stops receiving messages. Refetch too, so anything sent meanwhile shows up.
+    const onConnect = () => {
+      join();
+      loadLatest();
+    };
 
     const onNewMessage = (message: ChatMessage) => {
       if (message.conversationId !== selectedId) {
@@ -134,13 +161,16 @@ export function ChatShell({
       if (payload.conversationId === selectedId && payload.userId !== currentUser.id) setSeenByOther(true);
     };
 
+    socket.on("connect", onConnect);
     socket.on("message:new", onNewMessage);
     socket.on("typing:start", onTypingStart);
     socket.on("typing:stop", onTypingStop);
     socket.on("message:read", onRead);
 
     return () => {
+      cancelled = true;
       socket.emit("conversation:leave", selectedId);
+      socket.off("connect", onConnect);
       socket.off("message:new", onNewMessage);
       socket.off("typing:start", onTypingStart);
       socket.off("typing:stop", onTypingStop);
@@ -149,8 +179,32 @@ export function ChatShell({
   }, [socket, selectedId, currentUser.id]);
 
   useEffect(() => {
+    // Prepending older history shouldn't yank the view back to the bottom.
+    if (prependedEarlier.current) {
+      prependedEarlier.current = false;
+      return;
+    }
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  async function loadEarlier() {
+    const oldest = messages[0];
+    if (!selectedId || !oldest) return;
+    const conversationId = selectedId;
+    setLoadingEarlier(true);
+    try {
+      const res = await fetch(
+        `/api/v1/chat/conversations/${conversationId}/messages?before=${encodeURIComponent(oldest.id)}`
+      );
+      const data = await res.json();
+      if (!res.ok) return toast.error(data.error ?? "Could not load earlier messages");
+      prependedEarlier.current = true;
+      setMessages((prev) => (prev[0]?.conversationId === conversationId ? [...(data.messages ?? []), ...prev] : prev));
+      setHasEarlier(!!data.hasMore);
+    } finally {
+      setLoadingEarlier(false);
+    }
+  }
 
   function openConversation(conversationId: string) {
     setSelectedId(conversationId);
@@ -307,6 +361,11 @@ export function ChatShell({
             </div>
             <div className="flex-1 space-y-2 overflow-y-auto p-3">
               {loadingMessages && <p className="text-sm text-muted-foreground">Loading...</p>}
+              {!loadingMessages && hasEarlier && (
+                <Button variant="ghost" size="sm" className="mx-auto block" onClick={loadEarlier} disabled={loadingEarlier}>
+                  {loadingEarlier ? "Loading..." : "Load earlier messages"}
+                </Button>
+              )}
               {messages.map((m) => (
                 <div key={m.id} className={cn("max-w-[80%] rounded-lg px-3 py-2 text-sm", m.senderId === currentUser.id ? "ml-auto bg-primary text-primary-foreground" : "bg-muted")}>
                   {m.senderId !== currentUser.id && (

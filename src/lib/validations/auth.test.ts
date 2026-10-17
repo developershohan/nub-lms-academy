@@ -19,6 +19,14 @@ describe("registerSchema", () => {
   });
 });
 
+describe("email normalisation", () => {
+  it("lowercases and trims the email on register and login so one address can't map to two accounts", () => {
+    const registered = registerSchema.parse({ name: "Ada", email: "  Ada@Example.COM ", password: "password123" });
+    expect(registered.email).toBe("ada@example.com");
+    expect(loginSchema.parse({ email: "ADA@example.com", password: "x" }).email).toBe("ada@example.com");
+  });
+});
+
 describe("loginSchema", () => {
   it("requires a non-empty password but does not enforce a minimum length", () => {
     // Login must never be stricter than what registration allowed historically - a min-length

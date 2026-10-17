@@ -25,6 +25,24 @@ describe("resolveLoginDestination", () => {
     expect(resolveLoginDestination(["TEACHER"], "/student/billing")).toBe("/teacher/dashboard");
   });
 
+  it("never redirects off-site, falling back to the role home instead", () => {
+    for (const callback of [
+      "https://evil.example/phish",
+      "http://evil.example",
+      "//evil.example/path",
+      "/\\evil.example",
+      "/\t/evil.example",
+      "javascript:alert(1)",
+      "courses/no-leading-slash",
+    ]) {
+      expect(resolveLoginDestination(["STUDENT"], callback)).toBe("/student/dashboard");
+    }
+  });
+
+  it("keeps query strings on a safe same-origin callback", () => {
+    expect(resolveLoginDestination(["STUDENT"], "/courses?q=react")).toBe("/courses?q=react");
+  });
+
   it("falls back to the role home when no callback is given", () => {
     expect(resolveLoginDestination(["ADMIN"], null)).toBe("/admin/dashboard");
     expect(resolveLoginDestination(["ADMIN"], undefined)).toBe("/admin/dashboard");

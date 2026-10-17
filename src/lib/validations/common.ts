@@ -7,3 +7,15 @@ export const assignByEmailSchema = z.object({
 });
 
 export type AssignByEmailInput = z.infer<typeof assignByEmailSchema>;
+
+/**
+ * An optional numeric form field where a blank input (or a JSON null) means "not set". Plain
+ * `z.coerce.number()` turns "" and null into 0 before any `.or(z.literal(""))` fallback runs, which
+ * silently saved every blank sale price as $0 - i.e. made paid courses free.
+ */
+export function optionalNumber<T extends z.ZodType>(schema: T) {
+  return z.preprocess(
+    (value) => (value === null || (typeof value === "string" && value.trim() === "") ? undefined : value),
+    schema.optional()
+  );
+}

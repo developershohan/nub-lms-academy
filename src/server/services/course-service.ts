@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { canManageCourse, canAdminAccess } from "@/lib/permissions";
 import { logAudit } from "@/lib/audit";
 import { slugify } from "@/lib/slug";
+import { recomputeCourseCompletion } from "@/server/services/progress-service";
 import type { CourseDetailsInput, LessonInput } from "@/lib/validations/course";
 
 function linesToItems(text: string | undefined) {
@@ -329,6 +330,8 @@ export async function deleteSection(sectionId: string, userId: string) {
   if (!courseId || !(await canManageCourse(userId, courseId))) return { error: "Forbidden" } as const;
 
   await prisma.courseSection.delete({ where: { id: sectionId } });
+  // Its lessons went with it, which may leave some students with every remaining lesson done.
+  await recomputeCourseCompletion(courseId);
   revalidatePath(`/teacher/courses/${courseId}/edit`);
   return { ok: true } as const;
 }
@@ -361,6 +364,7 @@ export async function createLesson(sectionId: string, userId: string, data: Less
           : undefined,
     },
   });
+  await recomputeCourseCompletion(courseId);
   revalidatePath(`/teacher/courses/${courseId}/edit`);
   return { ok: true, lesson } as const;
 }
@@ -401,6 +405,7 @@ export async function deleteLesson(lessonId: string, userId: string) {
   if (!courseId || !(await canManageCourse(userId, courseId))) return { error: "Forbidden" } as const;
 
   await prisma.lesson.delete({ where: { id: lessonId } });
+  await recomputeCourseCompletion(courseId);
   revalidatePath(`/teacher/courses/${courseId}/edit`);
   return { ok: true } as const;
 }
