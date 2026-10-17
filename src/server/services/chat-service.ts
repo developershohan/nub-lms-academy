@@ -4,6 +4,16 @@ import { prisma } from "@/lib/prisma";
 import { canAccessConversation, canAccessCourse, canManageCourse, canModerateChat } from "@/lib/permissions";
 import { createNotifications } from "@/server/services/notification-service";
 import { logAudit } from "@/lib/audit";
+import { emitRealtime } from "@/lib/realtime";
+import {
+  directKey,
+  findOrCreateConversation,
+  listMessagePage,
+  listMessagesAfter,
+  markChatRead,
+  messagePreview,
+  sendChatMessage,
+} from "@/server/chat/messages";
 import type { RoleName } from "@/generated/prisma/client";
 
 function messagesPathForRoles(roles: RoleName[]) {
@@ -78,18 +88,13 @@ export async function startDirectConversation(userId: string, otherUserId: strin
 
   if (!allowed) return { error: "You can only message people connected to your courses" } as const;
 
-  const existing = await prisma.conversation.findFirst({
-    where: {
-      type: "DIRECT",
-      AND: [{ participants: { some: { userId } } }, { participants: { some: { userId: otherUserId } } }],
-    },
-  });
-  if (existing) return { ok: true, conversationId: existing.id } as const;
-
-  const conversation = await prisma.conversation.create({
-    data: { type: "DIRECT", participants: { create: [{ userId }, { userId: otherUserId }] } },
-  });
-  revalidateChatPaths();
+  const uniqueKey = directKey(userId, otherUserId);
+  const conversation = await findOrCreateConversation(uniqueKey, () =>
+    prisma.conversation.create({
+      data: { type: "DIRECT", uniqueKey, participants: { create: [{ userId }, { userId: otherUserId }] } },
+    })
+  );
+  if (conversation.created) revalidateChatPaths();
   return { ok: true, conversationId: conversation.id } as const;
 }
 
@@ -125,15 +130,11 @@ export function searchUsersToMessage(
 }
 
 export async function startSupportConversation(userId: string) {
-  const existing = await prisma.conversation.findFirst({
-    where: { type: "SUPPORT", participants: { some: { userId } } },
-  });
-  if (existing) return { ok: true, conversationId: existing.id } as const;
-
-  const conversation = await prisma.conversation.create({
-    data: { type: "SUPPORT", participants: { create: [{ userId }] } },
-  });
-  revalidateChatPaths();
+  const uniqueKey = `support:${userId}`;
+  const conversation = await findOrCreateConversation(uniqueKey, () =>
+    prisma.conversation.create({ data: { type: "SUPPORT", uniqueKey, participants: { create: [{ userId }] } } })
+  );
+  if (conversation.created) revalidateChatPaths();
   return { ok: true, conversationId: conversation.id } as const;
 }
 
@@ -144,10 +145,10 @@ export async function getOrCreateCourseGroupConversation(userId: string, courseI
   const allowed = (await canManageCourse(userId, courseId)) || (await canAccessCourse(userId, courseId));
   if (!allowed) return { error: "Forbidden" } as const;
 
-  let conversation = await prisma.conversation.findFirst({ where: { type: "COURSE_GROUP", courseId } });
-  if (!conversation) {
-    conversation = await prisma.conversation.create({ data: { type: "COURSE_GROUP", courseId } });
-  }
+  const uniqueKey = `course:${courseId}`;
+  const conversation = await findOrCreateConversation(uniqueKey, () =>
+    prisma.conversation.create({ data: { type: "COURSE_GROUP", courseId, uniqueKey } })
+  );
   await prisma.conversationParticipant.upsert({
     where: { conversationId_userId: { conversationId: conversation.id, userId } },
     create: { conversationId: conversation.id, userId },
@@ -156,15 +157,16 @@ export async function getOrCreateCourseGroupConversation(userId: string, courseI
   return { ok: true, conversationId: conversation.id } as const;
 }
 
+/** Most recent activity first. */
 export function listConversationsForUser(userId: string) {
   return prisma.conversation.findMany({
     where: { participants: { some: { userId } } },
     include: {
       course: { select: { id: true, title: true } },
       participants: { include: { user: { select: { id: true, name: true, email: true } } } },
-      messages: { orderBy: { createdAt: "desc" }, take: 1 },
+      messages: { orderBy: { seq: "desc" }, take: 1 },
     },
-    orderBy: { updatedAt: "desc" },
+    orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
   });
 }
 
@@ -175,19 +177,10 @@ export function listSupportConversationsForAdmin() {
     where: { type: "SUPPORT" },
     include: {
       participants: { include: { user: { select: { id: true, name: true, email: true } } } },
-      messages: { orderBy: { createdAt: "desc" }, take: 1 },
+      messages: { orderBy: { seq: "desc" }, take: 1 },
     },
-    orderBy: { updatedAt: "desc" },
+    orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { updatedAt: "desc" }],
   });
-}
-
-const REMOVED_MESSAGE = "Message removed";
-
-/** A removed message (sender's own delete or moderation) keeps its row, but its text must not reach
- * anyone except chat moderators - the UI showing "Message removed" isn't enough when the original
- * content is still in the JSON the browser receives. */
-function hideRemovedContent<T extends { content: string; deletedAt: Date | null }>(message: T): T {
-  return message.deletedAt ? { ...message, content: "" } : message;
 }
 
 export type ConversationSummary = {
@@ -196,7 +189,11 @@ export type ConversationSummary = {
   label: string;
   lastMessage: string | null;
   lastMessageAt: string | null;
-  unread: boolean;
+  /** Messages after the user's lastReadSeq. */
+  unread: number;
+  lastSeq: number;
+  /** For a DM, the other member - the inbox shows whether they're online. */
+  otherUserId: string | null;
 };
 
 function summarizeForUser(
@@ -210,19 +207,18 @@ function summarizeForUser(
       : conversation.type === "SUPPORT"
         ? "Support"
         : (other?.user.name ?? other?.user.email ?? "Direct message");
-  const last = conversation.messages[0] as
-    | { content: string; createdAt: Date; senderId: string; deletedAt: Date | null }
-    | undefined;
+  const last = conversation.messages[0];
   const mine = conversation.participants.find((p) => p.userId === currentUserId);
-  const unread = !!last && last.senderId !== currentUserId && (!mine?.lastReadAt || mine.lastReadAt < last.createdAt);
 
   return {
     id: conversation.id,
     type: conversation.type,
     label,
-    lastMessage: last ? (last.deletedAt ? REMOVED_MESSAGE : last.content) : null,
+    lastMessage: last ? messagePreview(last) : null,
     lastMessageAt: last ? last.createdAt.toISOString() : null,
-    unread,
+    unread: Math.max(0, conversation.lastSeq - (mine?.lastReadSeq ?? 0)),
+    lastSeq: conversation.lastSeq,
+    otherUserId: conversation.type === "DIRECT" ? (other?.userId ?? null) : null,
   };
 }
 
@@ -235,76 +231,77 @@ export async function listSupportConversationSummariesForAdmin(): Promise<Conver
   const conversations = await listSupportConversationsForAdmin();
   return conversations.map((conversation) => {
     const requester = conversation.participants[0];
-    const last = conversation.messages[0] as { content: string; createdAt: Date } | undefined;
+    const last = conversation.messages[0];
     return {
       id: conversation.id,
       type: "SUPPORT" as const,
       label: requester?.user.name ?? requester?.user.email ?? "Support request",
-      lastMessage: last?.content ?? null,
+      lastMessage: last ? messagePreview(last) : null,
       lastMessageAt: last ? last.createdAt.toISOString() : null,
-      unread: false,
+      unread: 0,
+      lastSeq: conversation.lastSeq,
+      otherUserId: requester?.userId ?? null,
     };
   });
 }
 
 /**
- * One page of a conversation, oldest-first for display. Fetched newest-first and reversed: the
- * old ascending order + take returned the OLDEST 50 messages, so once a conversation passed 50
- * nothing recent ever showed. `before` is the id of the oldest message the client already has,
- * for "load earlier messages"; `hasMore` says whether anything older remains.
+ * One page of a conversation, oldest first for display: the newest page, or with `beforeSeq` the
+ * page before the oldest message the client has. With `afterSeq` it is the catch-up instead -
+ * everything after the newest message the client has (see listMessagesAfter).
  */
 export async function listMessages(
   userId: string,
   conversationId: string,
-  { before, limit = 50 }: { before?: string; limit?: number } = {}
+  { beforeSeq, afterSeq }: { beforeSeq?: number; afterSeq?: number } = {}
 ) {
   if (!(await canAccessConversation(userId, conversationId))) return { error: "Forbidden" } as const;
-
-  const newestFirst = await prisma.message.findMany({
-    where: { conversationId },
-    include: { sender: { select: { id: true, name: true } } },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: limit + 1,
-    ...(before ? { cursor: { id: before }, skip: 1 } : {}),
-  });
-  const hasMore = newestFirst.length > limit;
-  const page = newestFirst.slice(0, limit).reverse();
-  const messages = (await canModerateChat(userId)) ? page : page.map(hideRemovedContent);
-  return { ok: true, messages, hasMore } as const;
+  const moderator = await canModerateChat(userId);
+  if (afterSeq !== undefined) {
+    const { messages, reset } = await listMessagesAfter(conversationId, afterSeq, { moderator });
+    return { ok: true, messages, hasMore: false, reset } as const;
+  }
+  const { messages, hasMore } = await listMessagePage(conversationId, { beforeSeq, moderator });
+  return { ok: true, messages, hasMore, reset: false } as const;
 }
 
-export async function sendMessage(senderId: string, conversationId: string, content: string) {
+/**
+ * Sends from Next.js (the REST API). The socket server does the same for live senders; both go
+ * through sendChatMessage, so seq and clientMsgId behave identically either way.
+ */
+export async function sendMessage(senderId: string, conversationId: string, content: string, clientMsgId?: string) {
   if (!(await canAccessConversation(senderId, conversationId))) return { error: "Forbidden" } as const;
 
-  const trimmed = content.trim();
-  if (!trimmed) return { error: "Message cannot be empty" } as const;
-  if (trimmed.length > 2000) return { error: "Message is too long" } as const;
+  const result = await sendChatMessage({ conversationId, senderId, content, clientMsgId });
+  if ("error" in result) return result;
+  const { message } = result;
+  if (result.duplicate) return { ok: true, message } as const;
 
-  const message = await prisma.$transaction(async (tx) => {
-    const created = await tx.message.create({
-      data: { conversationId, senderId, content: trimmed },
-      include: { sender: { select: { id: true, name: true } } },
-    });
-    await tx.conversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
-    await tx.conversationParticipant.updateMany({
-      where: { conversationId, userId: senderId },
-      data: { lastReadAt: new Date() },
-    });
-    return created;
-  });
+  emitRealtime(`conversation:${conversationId}`, "message:new", message);
+  const update = {
+    conversationId,
+    lastSeq: message.seq,
+    lastMessageAt: message.createdAt,
+    preview: messagePreview(message),
+    senderId,
+  };
+  emitRealtime(`user:${senderId}`, "conversation:updated", { ...update, unread: 0 });
+  for (const { userId, unread } of result.recipients) {
+    emitRealtime(`user:${userId}`, "conversation:updated", { ...update, unread });
+  }
 
-  const recipients = await prisma.conversationParticipant.findMany({
-    where: { conversationId, userId: { not: senderId } },
-    select: { userId: true, user: { select: { roles: { select: { role: { select: { name: true } } } } } } },
-  });
-  if (recipients.length) {
+  if (result.recipients.length) {
+    const recipientRoles = await prisma.user.findMany({
+      where: { id: { in: result.recipients.map((r) => r.userId) } },
+      select: { id: true, roles: { select: { role: { select: { name: true } } } } },
+    });
     await createNotifications(
-      recipients.map((r) => ({
-        userId: r.userId,
+      recipientRoles.map((r) => ({
+        userId: r.id,
         type: "message",
         title: "New message",
-        body: trimmed.slice(0, 140),
-        link: messagesPathForRoles(r.user.roles.map((x) => x.role.name)),
+        body: message.content.slice(0, 140),
+        link: messagesPathForRoles(r.roles.map((x) => x.role.name)),
       }))
     );
   }
@@ -313,26 +310,18 @@ export async function sendMessage(senderId: string, conversationId: string, cont
   return { ok: true, message } as const;
 }
 
-export async function markConversationRead(userId: string, conversationId: string) {
+export async function markConversationRead(userId: string, conversationId: string, seq?: number) {
   if (!(await canAccessConversation(userId, conversationId))) return { error: "Forbidden" } as const;
 
-  await prisma.conversationParticipant.upsert({
-    where: { conversationId_userId: { conversationId, userId } },
-    create: { conversationId, userId, lastReadAt: new Date() },
-    update: { lastReadAt: new Date() },
+  const result = await markChatRead(conversationId, userId, seq);
+  if ("error" in result) return result;
+  emitRealtime(`user:${userId}`, "conversation:updated", { conversationId, unread: result.unread });
+  emitRealtime(`conversation:${conversationId}`, "conversation:read", {
+    conversationId,
+    userId,
+    lastReadSeq: result.lastReadSeq,
   });
-
-  const unread = await prisma.message.findMany({
-    where: { conversationId, senderId: { not: userId } },
-    select: { id: true },
-  });
-  if (unread.length) {
-    await prisma.messageReadReceipt.createMany({
-      data: unread.map((m) => ({ messageId: m.id, userId })),
-      skipDuplicates: true,
-    });
-  }
-  return { ok: true } as const;
+  return result;
 }
 
 export async function getConversationParticipants(userId: string, conversationId: string) {

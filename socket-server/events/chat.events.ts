@@ -1,6 +1,7 @@
 import type { Server, Socket } from "socket.io";
-import { sendMessageSchema } from "@/lib/validations/chat";
-import { canAccessConversation, persistMessage, markConversationRead } from "../chat-store";
+import { readMessagesSchema, sendMessageSchema, syncMessagesSchema } from "@/lib/validations/chat";
+import { messagePreview } from "@/server/chat/messages";
+import { canAccessConversation, listMessagesAfter, markChatRead, persistMessage } from "../chat-store";
 
 const conversationRoom = (conversationId: string) => `conversation:${conversationId}`;
 
@@ -25,7 +26,9 @@ export function clearRateLimit(socketId: string) {
   rateBuckets.delete(socketId);
 }
 
-type Ack = (res: { error?: string }) => void;
+type Ack = (res: { error?: string; [key: string]: unknown }) => void;
+
+const CHAT_MODERATOR_ROLES = ["ADMIN", "SUPER_ADMIN", "SUPPORT"];
 
 /**
  * Every async handler below hits the database. Socket.IO doesn't catch a listener's rejected
@@ -98,6 +101,10 @@ export function registerChatEvents(io: Server, socket: Socket) {
     })
   );
 
+  /**
+   * The ack carries the saved message (with its seq), which replaces the sender's pending copy.
+   * A retry with the same clientMsgId is acked with the original and not broadcast again.
+   */
   socket.on(
     "message:send",
     safely("message:send", async (payload: unknown, ack?: Ack) => {
@@ -106,28 +113,66 @@ export function registerChatEvents(io: Server, socket: Socket) {
       const parsed = sendMessageSchema.safeParse(payload);
       if (!parsed.success) return ack?.({ error: parsed.error.issues[0].message });
 
-      const { conversationId, content } = parsed.data;
+      const { conversationId, content, clientMsgId } = parsed.data;
       const allowed = await canAccessConversation(roleNames, userId, conversationId);
       if (!allowed) return ack?.({ error: "Forbidden" });
 
-      const { message, recipientIds } = await persistMessage(conversationId, userId, content);
-      io.to(conversationRoom(conversationId)).emit("message:new", message);
-      for (const recipientId of recipientIds) {
-        io.to(`user:${recipientId}`).emit("notification:new");
+      const result = await persistMessage(conversationId, userId, content, clientMsgId);
+      if ("error" in result) return ack?.({ error: result.error });
+      const { message } = result;
+
+      if (!result.duplicate) {
+        io.to(conversationRoom(conversationId)).emit("message:new", message);
+        const update = {
+          conversationId,
+          lastSeq: message.seq,
+          lastMessageAt: message.createdAt,
+          preview: messagePreview(message),
+          senderId: userId,
+        };
+        // Every member's inbox (all their tabs) moves this conversation up, with their unread count.
+        for (const { userId: recipientId, unread } of result.recipients) {
+          io.to(`user:${recipientId}`).emit("conversation:updated", { ...update, unread });
+          io.to(`user:${recipientId}`).emit("notification:new");
+        }
+        io.to(`user:${userId}`).emit("conversation:updated", { ...update, unread: 0 });
       }
-      ack?.({});
+      ack?.({ message });
     })
   );
 
+  /** Moves the reader's lastReadSeq forward. Their other tabs clear the unread badge, and the
+   * room learns how far they've read (a DM shows "Seen" from it) - no per-message receipts. */
   socket.on(
     "message:read",
-    safely("message:read", async (conversationId: unknown) => {
-      if (typeof conversationId !== "string") return;
-      const allowed = await canAccessConversation(roleNames, userId, conversationId);
-      if (!allowed) return;
+    safely("message:read", async (payload: unknown) => {
+      const parsed = readMessagesSchema.safeParse(typeof payload === "string" ? { conversationId: payload } : payload);
+      if (!parsed.success) return;
+      const { conversationId, seq } = parsed.data;
+      if (!(await canAccessConversation(roleNames, userId, conversationId))) return;
 
-      await markConversationRead(conversationId, userId);
-      socket.to(conversationRoom(conversationId)).emit("message:read", { conversationId, userId });
+      const result = await markChatRead(conversationId, userId, seq);
+      if ("error" in result) return;
+      io.to(`user:${userId}`).emit("conversation:updated", { conversationId, unread: result.unread });
+      socket
+        .to(conversationRoom(conversationId))
+        .emit("conversation:read", { conversationId, userId, lastReadSeq: result.lastReadSeq });
+    })
+  );
+
+  /** Reconnect catch-up: the messages after the newest one the client has, so nothing sent while
+   * it was offline is lost - or `reset` when so much arrived that it should reload instead. */
+  socket.on(
+    "sync",
+    safely("sync", async (payload: unknown, ack?: Ack) => {
+      const parsed = syncMessagesSchema.safeParse(payload);
+      if (!parsed.success) return ack?.({ error: "Invalid sync request" });
+      const { conversationId, lastSeq } = parsed.data;
+      if (!(await canAccessConversation(roleNames, userId, conversationId))) return ack?.({ error: "Forbidden" });
+
+      const moderator = roleNames.some((role: string) => CHAT_MODERATOR_ROLES.includes(role));
+      const { messages, reset } = await listMessagesAfter(conversationId, lastSeq, { moderator });
+      ack?.({ messages, reset });
     })
   );
 

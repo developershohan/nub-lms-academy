@@ -20,6 +20,7 @@ import { StaffContactPanel } from "@/components/chat/staff-contact-panel";
 
 type ChatMessage = {
   id: string;
+  seq: number;
   conversationId: string;
   senderId: string;
   content: string;
@@ -140,7 +141,7 @@ export function ChatShell({
         setConversations((prev) =>
           prev.map((c) =>
             c.id === message.conversationId
-              ? { ...c, lastMessage: message.content, lastMessageAt: message.createdAt, unread: true }
+              ? { ...c, lastMessage: message.content, lastMessageAt: message.createdAt, unread: c.unread + 1 }
               : c
           )
         );
@@ -165,6 +166,7 @@ export function ChatShell({
     const onRead = (payload: { conversationId: string; userId: string }) => {
       if (payload.conversationId === selectedId && payload.userId !== currentUser.id) setSeenByOther(true);
     };
+    socket.on("conversation:read", onRead);
 
     socket.on("connect", onConnect);
     socket.on("message:new", onNewMessage);
@@ -180,6 +182,7 @@ export function ChatShell({
       socket.off("typing:start", onTypingStart);
       socket.off("typing:stop", onTypingStop);
       socket.off("message:read", onRead);
+      socket.off("conversation:read", onRead);
     };
   }, [socket, selectedId, currentUser.id]);
 
@@ -199,7 +202,7 @@ export function ChatShell({
     setLoadingEarlier(true);
     try {
       const res = await fetch(
-        `/api/v1/chat/conversations/${conversationId}/messages?before=${encodeURIComponent(oldest.id)}`
+        `/api/v1/chat/conversations/${conversationId}/messages?before=${oldest.seq}`
       );
       const data = await res.json();
       if (!res.ok) return toast.error(data.error ?? "Could not load earlier messages");
@@ -213,7 +216,7 @@ export function ChatShell({
 
   function openConversation(conversationId: string) {
     setSelectedId(conversationId);
-    setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, unread: false } : c)));
+    setConversations((prev) => prev.map((c) => (c.id === conversationId ? { ...c, unread: 0 } : c)));
   }
 
   async function handleStartDirect(userId: string) {
@@ -221,7 +224,7 @@ export function ChatShell({
     if ("error" in result) return toast.error(result.error);
     if (!conversations.some((c) => c.id === result.conversationId)) {
       setConversations((prev) => [
-        { id: result.conversationId, type: "DIRECT", label: "Direct message", lastMessage: null, lastMessageAt: null, unread: false },
+        { id: result.conversationId, type: "DIRECT", label: "Direct message", lastMessage: null, lastMessageAt: null, unread: 0, lastSeq: 0, otherUserId: userId },
         ...prev,
       ]);
     }
@@ -233,7 +236,7 @@ export function ChatShell({
     if ("error" in result) return toast.error(result.error);
     if (!conversations.some((c) => c.id === result.conversationId)) {
       setConversations((prev) => [
-        { id: result.conversationId, type: "COURSE_GROUP", label, lastMessage: null, lastMessageAt: null, unread: false },
+        { id: result.conversationId, type: "COURSE_GROUP", label, lastMessage: null, lastMessageAt: null, unread: 0, lastSeq: 0, otherUserId: null },
         ...prev,
       ]);
     }
@@ -245,7 +248,7 @@ export function ChatShell({
     if ("error" in result) return toast.error(result.error);
     if (!conversations.some((c) => c.id === result.conversationId)) {
       setConversations((prev) => [
-        { id: result.conversationId, type: "SUPPORT", label: "Support", lastMessage: null, lastMessageAt: null, unread: false },
+        { id: result.conversationId, type: "SUPPORT", label: "Support", lastMessage: null, lastMessageAt: null, unread: 0, lastSeq: 0, otherUserId: null },
         ...prev,
       ]);
     }
@@ -339,7 +342,7 @@ export function ChatShell({
             >
               <div className="flex items-center justify-between">
                 <span className="font-medium">{c.label}</span>
-                {c.unread && <Badge variant="secondary">New</Badge>}
+                {c.unread > 0 && <Badge variant="secondary">{c.unread}</Badge>}
               </div>
               {c.lastMessage && <p className="truncate text-xs text-muted-foreground">{c.lastMessage}</p>}
             </button>

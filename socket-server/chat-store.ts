@@ -4,6 +4,7 @@
 // canAccessConversation below mirrors src/lib/permissions.ts's version - keep both in sync.
 import { prisma } from "@/lib/prisma";
 import type { RoleName } from "@/generated/prisma/client";
+import { sendChatMessage } from "@/server/chat/messages";
 
 export async function getActiveUserWithRoles(userId: string) {
   const user = await prisma.user.findUnique({
@@ -54,27 +55,15 @@ export async function canAccessConversation(roleNames: RoleName[], userId: strin
   return !!participant;
 }
 
-export async function persistMessage(conversationId: string, senderId: string, content: string) {
-  const message = await prisma.$transaction(async (tx) => {
-    const created = await tx.message.create({
-      data: { conversationId, senderId, content },
-      include: { sender: { select: { id: true, name: true } } },
-    });
-    await tx.conversation.update({ where: { id: conversationId }, data: { updatedAt: new Date() } });
-    await tx.conversationParticipant.updateMany({
-      where: { conversationId, userId: senderId },
-      data: { lastReadAt: new Date() },
-    });
-    return created;
-  });
+/** Sends through the shared chat module (seq, idempotent clientMsgId), then leaves one "new
+ * message" notification per recipient. */
+export async function persistMessage(conversationId: string, senderId: string, content: string, clientMsgId?: string) {
+  const result = await sendChatMessage({ conversationId, senderId, content, clientMsgId });
+  if ("error" in result) return result;
 
-  const recipients = await prisma.conversationParticipant.findMany({
-    where: { conversationId, userId: { not: senderId } },
-    select: { userId: true },
-  });
-  if (recipients.length) {
+  if (!result.duplicate && result.recipients.length) {
     await prisma.notification.createMany({
-      data: recipients.map((r) => ({
+      data: result.recipients.map((r) => ({
         userId: r.userId,
         type: "message",
         title: "New message",
@@ -82,25 +71,7 @@ export async function persistMessage(conversationId: string, senderId: string, c
       })),
     });
   }
-
-  return { message, recipientIds: recipients.map((r) => r.userId) };
+  return result;
 }
 
-export async function markConversationRead(conversationId: string, userId: string) {
-  await prisma.conversationParticipant.upsert({
-    where: { conversationId_userId: { conversationId, userId } },
-    create: { conversationId, userId, lastReadAt: new Date() },
-    update: { lastReadAt: new Date() },
-  });
-
-  const unread = await prisma.message.findMany({
-    where: { conversationId, senderId: { not: userId } },
-    select: { id: true },
-  });
-  if (unread.length) {
-    await prisma.messageReadReceipt.createMany({
-      data: unread.map((m) => ({ messageId: m.id, userId })),
-      skipDuplicates: true,
-    });
-  }
-}
+export { markChatRead, listMessagesAfter } from "@/server/chat/messages";

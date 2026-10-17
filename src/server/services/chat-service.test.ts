@@ -17,7 +17,7 @@ import { canModerateChat } from "@/lib/permissions";
 import { getConversationParticipants, listConversationSummariesForUser, listMessages } from "./chat-service";
 
 const prisma = prismaClient as unknown as PrismaMock;
-const message = (n: number) => ({ id: `m${n}`, content: `message ${n}` });
+const message = (n: number) => ({ id: `m${n}`, seq: n, content: `message ${n}` });
 
 const canModerate = canModerateChat as unknown as ReturnType<typeof vi.fn>;
 const removed = { id: "m2", content: "something abusive", deletedAt: new Date() };
@@ -34,9 +34,7 @@ describe("listMessages", () => {
 
     const result = await listMessages("student-1", "c1");
 
-    expect(prisma.message.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], take: 51 })
-    );
+    expect(prisma.message.findMany).toHaveBeenCalledWith(expect.objectContaining({ orderBy: { seq: "desc" }, take: 51 }));
     expect(result).toMatchObject({ ok: true, hasMore: true });
     const { messages } = result as { messages: { id: string }[] };
     expect(messages).toHaveLength(50);
@@ -44,12 +42,14 @@ describe("listMessages", () => {
     expect(messages[49].id).toBe("m60");
   });
 
-  it("pages back from a `before` cursor", async () => {
+  it("pages back from the oldest seq the client has", async () => {
     prisma.message.findMany.mockResolvedValue([message(3), message(2), message(1)]);
 
-    const result = await listMessages("student-1", "c1", { before: "m4" });
+    const result = await listMessages("student-1", "c1", { beforeSeq: 4 });
 
-    expect(prisma.message.findMany).toHaveBeenCalledWith(expect.objectContaining({ cursor: { id: "m4" }, skip: 1 }));
+    expect(prisma.message.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { conversationId: "c1", seq: { lt: 4 } } })
+    );
     expect(result).toMatchObject({ ok: true, hasMore: false, messages: [message(1), message(2), message(3)] });
   });
 });

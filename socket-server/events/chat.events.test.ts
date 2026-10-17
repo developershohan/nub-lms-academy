@@ -4,14 +4,16 @@ import type { Server, Socket } from "socket.io";
 vi.mock("../chat-store", () => ({
   canAccessConversation: vi.fn(),
   persistMessage: vi.fn(),
-  markConversationRead: vi.fn(),
+  markChatRead: vi.fn(),
+  listMessagesAfter: vi.fn(),
 }));
 
-import { canAccessConversation, persistMessage } from "../chat-store";
+import { canAccessConversation, listMessagesAfter, persistMessage } from "../chat-store";
 import { registerChatEvents } from "./chat.events";
 
 const canAccess = canAccessConversation as unknown as ReturnType<typeof vi.fn>;
 const persist = persistMessage as unknown as ReturnType<typeof vi.fn>;
+const messagesAfter = listMessagesAfter as unknown as ReturnType<typeof vi.fn>;
 
 type Emitted = { target: string; event: string; payload: unknown };
 type Handler = (...args: unknown[]) => Promise<void> | void;
@@ -100,5 +102,50 @@ describe("chat socket events", () => {
     await handlers.get("disconnecting")!();
 
     expect(emitted).toEqual([{ target: "conversation:c1", event: "user:offline", payload: { userId: "student-1" } }]);
+  });
+
+  const saved = { id: "m9", seq: 9, conversationId: "c1", senderId: "student-1", content: "hi", deletedAt: null, createdAt: new Date() };
+
+  it("acks the saved message, and tells each member's inbox their unread count", async () => {
+    const { handlers, emitted } = setup();
+    canAccess.mockResolvedValue(true);
+    persist.mockResolvedValue({ ok: true, message: saved, duplicate: false, recipients: [{ userId: "teacher-1", unread: 3 }] });
+    const ack = vi.fn();
+
+    await handlers.get("message:send")!({ conversationId: "c1", content: "hi", clientMsgId: "tmp-1" }, ack);
+
+    expect(persist).toHaveBeenCalledWith("c1", "student-1", "hi", "tmp-1");
+    expect(ack).toHaveBeenCalledWith({ message: saved });
+    expect(emitted).toContainEqual({ target: "conversation:c1", event: "message:new", payload: saved });
+    expect(emitted).toContainEqual(
+      expect.objectContaining({ target: "user:teacher-1", event: "conversation:updated", payload: expect.objectContaining({ unread: 3, lastSeq: 9 }) })
+    );
+  });
+
+  it("acks a retried send with the original message without broadcasting it again", async () => {
+    const { handlers, emitted } = setup();
+    canAccess.mockResolvedValue(true);
+    persist.mockResolvedValue({ ok: true, message: saved, duplicate: true, recipients: [] });
+    const ack = vi.fn();
+
+    await handlers.get("message:send")!({ conversationId: "c1", content: "hi", clientMsgId: "tmp-1" }, ack);
+
+    expect(ack).toHaveBeenCalledWith({ message: saved });
+    expect(emitted).toEqual([]);
+  });
+
+  it("answers a reconnect sync with the gap, only for conversations the user can open", async () => {
+    const { handlers } = setup();
+    messagesAfter.mockResolvedValue({ messages: [saved], reset: false });
+    const ack = vi.fn();
+
+    canAccess.mockResolvedValue(false);
+    await handlers.get("sync")!({ conversationId: "c1", lastSeq: 8 }, ack);
+    expect(ack).toHaveBeenLastCalledWith({ error: "Forbidden" });
+
+    canAccess.mockResolvedValue(true);
+    await handlers.get("sync")!({ conversationId: "c1", lastSeq: 8 }, ack);
+    expect(messagesAfter).toHaveBeenCalledWith("c1", 8, { moderator: false });
+    expect(ack).toHaveBeenLastCalledWith({ messages: [saved], reset: false });
   });
 });
